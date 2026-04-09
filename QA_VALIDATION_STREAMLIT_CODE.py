@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import time
 import base64
+import pandas as pd
+from datetime import datetime
 
 # =========================================================
 # PAGE CONFIG
@@ -17,7 +19,7 @@ st.set_page_config(
 # DATABRICKS CONFIG
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapiXXXXXXXXXXXX"   # use st.secrets in prod
+TOKEN = "dapiXXXXXXXXXXXXXXXX"  # ✅ move to st.secrets in prod
 
 WORKSPACE_DIR = "/Shared/uploads"
 
@@ -25,6 +27,15 @@ HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json"
 }
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+if "selected" not in st.session_state:
+    st.session_state.selected = "All Validation"
+
+if "job_history" not in st.session_state:
+    st.session_state.job_history = []
 
 # =========================================================
 # JOB CONFIGURATION
@@ -56,30 +67,85 @@ JOB_CONFIG = {
 }
 
 # =========================================================
-# JOB STATUS TRACKER
+# CUSTOM CSS (BUTTON COLOR + SIZE)
 # =========================================================
-def track_job(run_id, label):
+st.markdown("""
+<style>
+.big-btn button {
+    background-color: #2563EB;
+    color: white;
+    height: 72px;
+    font-size: 22px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.med-btn button {
+    height: 56px;
+    font-size: 17px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.stm button { background-color: #0EA5E9; color: white; }
+.scd button { background-color: #16A34A; color: white; }
+.stmval button { background-color: #9333EA; color: white; }
+.scdtc button { background-color: #F97316; color: white; }
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# JOB LOG DOWNLOAD
+# =========================================================
+def download_job_logs(run_id):
+    r = requests.get(
+        f"{DATABRICKS_HOST}/api/2.1/jobs/runs/get-output?run_id={run_id}",
+        headers=HEADERS
+    )
+    if r.status_code != 200:
+        return None
+    return r.json().get("logs", "No logs available")
+
+# =========================================================
+# JOB STATUS TRACKER + HISTORY
+# =========================================================
+def track_job(run_id, label, job_id):
     box = st.empty()
+
     while True:
         r = requests.get(
             f"{DATABRICKS_HOST}/api/2.2/jobs/runs/get?run_id={run_id}",
             headers=HEADERS
         )
 
-        if r.status_code != 200:
-            box.error("❌ Unable to fetch job status")
-            break
-
         state = r.json()["state"]["life_cycle_state"]
         result = r.json()["state"].get("result_state")
 
-        box.info(f"⏳ {label} : {state}")
+        box.info(f"⏳ {label} Status : {state}")
 
         if state in ["TERMINATED", "SKIPPED", "INTERNAL_ERROR"]:
-            if result == "SUCCESS":
-                box.success(f"✅ {label} completed successfully")
+            final_status = result or state
+
+            st.session_state.job_history.append({
+                "Category": label,
+                "Job ID": job_id,
+                "Run ID": run_id,
+                "Status": final_status,
+                "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+
+            if final_status == "SUCCESS":
+                box.success("✅ Job completed successfully")
             else:
-                box.error(f"❌ {label} failed : {result}")
+                box.error(f"❌ Job failed : {final_status}")
+
+            logs = download_job_logs(run_id)
+            if logs:
+                st.download_button(
+                    "📥 Download Job Logs",
+                    logs,
+                    file_name=f"{run_id}_logs.txt"
+                )
             break
 
         time.sleep(10)
@@ -89,14 +155,14 @@ def track_job(run_id, label):
 # =========================================================
 st.markdown("""
 # ✅ QA Validation Portal
-Enterprise‑grade UI for validations & testcase generation
+Enterprise‑ready UI for QA validations & testcase generation
 """)
 
 # =========================================================
 # SIDEBAR – FILE UPLOAD (UNCHANGED)
 # =========================================================
 with st.sidebar:
-    st.header("📂 Upload Files (Auto Job)")
+    st.header("📂 Upload Files (Auto Job Trigger)")
 
     uploaded_files = st.file_uploader(
         "Upload files",
@@ -104,7 +170,7 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-    if uploaded_files and st.button("🚀 Upload & Trigger File Job"):
+    if uploaded_files and st.button("🚀 Upload Files"):
         for file in uploaded_files:
             try:
                 encoded = base64.b64encode(file.getvalue()).decode("utf-8")
@@ -130,38 +196,46 @@ with st.sidebar:
                 st.error(str(e))
 
 # =========================================================
-# CATEGORY BUTTONS (UI)
+# CATEGORY BUTTONS
 # =========================================================
 st.divider()
 st.subheader("🔹 Select QA Validation Category")
 
-if "selected" not in st.session_state:
-    st.session_state.selected = "All Validation"
-
-# BIG BUTTON
+st.markdown("<div class='big-btn'>", unsafe_allow_html=True)
 if st.button("✅ All Validation", use_container_width=True):
     st.session_state.selected = "All Validation"
+st.markdown("</div>", unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    if st.button("📄 STM TC Gen"):
+    st.markdown("<div class='med-btn stm'>", unsafe_allow_html=True)
+    if st.button("📄 STM TC Gen", use_container_width=True):
         st.session_state.selected = "STM Test Case Generation"
-with c2:
-    if st.button("🔁 SCD Validation"):
-        st.session_state.selected = "SCD Validation"
-with c3:
-    if st.button("✅ STM Validation"):
-        st.session_state.selected = "STM Validation"
-with c4:
-    if st.button("🧪 SCD TC Gen"):
-        st.session_state.selected = "SCD Testcases Generation"
+    st.markdown("</div>", unsafe_allow_html=True)
 
-st.divider()
+with c2:
+    st.markdown("<div class='med-btn scd'>", unsafe_allow_html=True)
+    if st.button("🔁 SCD Validation", use_container_width=True):
+        st.session_state.selected = "SCD Validation"
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with c3:
+    st.markdown("<div class='med-btn stmval'>", unsafe_allow_html=True)
+    if st.button("✅ STM Validation", use_container_width=True):
+        st.session_state.selected = "STM Validation"
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with c4:
+    st.markdown("<div class='med-btn scdtc'>", unsafe_allow_html=True)
+    if st.button("🧪 SCD TC Gen", use_container_width=True):
+        st.session_state.selected = "SCD Testcases Generation"
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
 # DYNAMIC FORM
 # =========================================================
+st.divider()
 category = st.session_state.selected
 job = JOB_CONFIG[category]
 
@@ -170,7 +244,6 @@ st.subheader(f"🛠 {category}")
 with st.form("job_form"):
     inputs = {}
     cols = st.columns(2)
-
     for i, p in enumerate(job["params"]):
         with cols[i % 2]:
             if p == "SCD_TYPE":
@@ -181,7 +254,7 @@ with st.form("job_form"):
     submit = st.form_submit_button("🚀 Run Job")
 
 # =========================================================
-# JOB TRIGGER + STATUS
+# JOB TRIGGER
 # =========================================================
 if submit:
     payload = {
@@ -201,4 +274,16 @@ if submit:
         else:
             run_id = r.json()["run_id"]
             st.success(f"✅ Job Started | Run ID: {run_id}")
-            track_job(run_id, category)
+            track_job(run_id, category, job["job_id"])
+
+# =========================================================
+# JOB HISTORY TABLE
+# =========================================================
+st.divider()
+st.subheader("📊 Job Execution History")
+
+if st.session_state.job_history:
+    df = pd.DataFrame(st.session_state.job_history)
+    st.dataframe(df, use_container_width=True)
+else:
+    st.info("No jobs executed yet.")
