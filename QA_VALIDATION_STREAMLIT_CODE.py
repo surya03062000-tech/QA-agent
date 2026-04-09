@@ -19,7 +19,8 @@ st.set_page_config(
 # DATABRICKS CONFIG
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapiXXXXXXXXXXXX"  # move to st.secrets in prod
+TOKEN = "dapi180370eb25ac521baee3f96924db98e9"  # ✅ move to st.secrets in prod
+
 WORKSPACE_DIR = "/Shared/uploads"
 
 HEADERS = {
@@ -36,9 +37,6 @@ if "selected" not in st.session_state:
 if "job_history" not in st.session_state:
     st.session_state.job_history = []
 
-if "last_job_payload" not in st.session_state:
-    st.session_state.last_job_payload = None
-
 # =========================================================
 # JOB CONFIGURATION
 # =========================================================
@@ -47,8 +45,7 @@ JOB_CONFIG = {
         "job_id": 566631342323223,
         "params": [
             "STM_FILE", "SHEET_NAME", "SOURCE_FILE",
-            "SOURCE_TABLE", "TARGET_TABLE",
-            "PRIMARY_KEYS", "SCD_TYPE"
+            "SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"
         ]
     },
     "STM Test Case Generation": {
@@ -68,48 +65,78 @@ JOB_CONFIG = {
         "params": ["SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"]
     }
 }
-
 # =========================================================
-# OUTPUT FILE PATH MAPPING 🔥 NEW
+# OUTPUT FILE PATHS (CATEGORY WISE)
 # =========================================================
-def get_output_paths(category, params):
+def get_output_files(category, params):
     base = "/Volumes/edl_qa/qa_agent/qa_validation"
 
     if category == "All Validation":
         return [
-            f"{base}/{params['STM_FILE']}_STM_Testcases.xlsx",
-            f"{base}/{params['TARGET_TABLE']}_SCD_Validation.xlsx",
-            f"{base}/{params['TARGET_TABLE']}_SCD_Testcases.xlsx",
-            f"{base}/{params['TARGET_TABLE']}_STM_vs_Target_final_output.xlsx"
+            f"{base}/{params.get('STM_FILE')}_STM_Testcases.xlsx",
+            f"{base}/{params.get('TARGET_TABLE')}_SCD_Validation.xlsx",
+            f"{base}/{params.get('TARGET_TABLE')}_SCD_Testcases.xlsx",
+            f"{base}/{params.get('TARGET_TABLE')}_STM_vs_Target_final_output.xlsx",
         ]
+
     if category == "STM Test Case Generation":
-        return [f"{base}/{params['STM_FILE']}_STM_Testcases.xlsx"]
+        return [f"{base}/{params.get('STM_FILE')}_STM_Testcases.xlsx"]
+
     if category == "SCD Validation":
-        return [f"{base}/{params['TARGET_TABLE']}_SCD_Validation.xlsx"]
+        return [f"{base}/{params.get('TARGET_TABLE')}_SCD_Validation.xlsx"]
+
     if category == "SCD Testcases Generation":
-        return [f"{base}/{params['TARGET_TABLE']}_SCD_Testcases.xlsx"]
+        return [f"{base}/{params.get('TARGET_TABLE')}_SCD_Testcases.xlsx"]
+
     if category == "STM Validation":
-        return [f"{base}/{params['TARGET_TABLE']}_STM_vs_Target_final_output.xlsx"]
+        return [f"{base}/{params.get('TARGET_TABLE')}_STM_vs_Target_final_output.xlsx"]
 
     return []
+# =========================================================
+# CUSTOM CSS (BUTTON COLOR + SIZE)
+# =========================================================
+st.markdown("""
+<style>
+.big-btn button {
+    background-color: #2563EB;
+    color: white;
+    height: 72px;
+    font-size: 22px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.med-btn button {
+    height: 56px;
+    font-size: 17px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.stm button { background-color: #0EA5E9; color: white; }
+.scd button { background-color: #16A34A; color: white; }
+.stmval button { background-color: #9333EA; color: white; }
+.scdtc button { background-color: #F97316; color: white; }
+</style>
+""", unsafe_allow_html=True)
 
 # =========================================================
-# DOWNLOAD + INLINE LOG VIEWER 🔥 NEW
+# JOB LOG DOWNLOAD
 # =========================================================
-def get_job_logs(run_id):
+def download_job_logs(run_id):
     r = requests.get(
         f"{DATABRICKS_HOST}/api/2.1/jobs/runs/get-output?run_id={run_id}",
         headers=HEADERS
     )
     if r.status_code != 200:
-        return "Unable to fetch logs"
-    return r.json().get("logs", "No logs")
+        return None
+    return r.json().get("logs", "No logs available")
 
 # =========================================================
-# JOB STATUS TRACKER 🔥 UPGRADED
+# JOB STATUS TRACKER + HISTORY
 # =========================================================
-def track_job(run_id, category, job_id, params):
-    status_box = st.empty()
+def track_job(run_id, category, job_id, params, payload):
+    box = st.empty()
 
     while True:
         r = requests.get(
@@ -120,7 +147,7 @@ def track_job(run_id, category, job_id, params):
         state = r.json()["state"]["life_cycle_state"]
         result = r.json()["state"].get("result_state")
 
-        status_box.info(f"⏳ {category} Status: {state}")
+        box.info(f"⏳ {category} Status : {state}")
 
         if state in ["TERMINATED", "SKIPPED", "INTERNAL_ERROR"]:
             final_status = result or state
@@ -136,66 +163,128 @@ def track_job(run_id, category, job_id, params):
             job_url = f"{DATABRICKS_HOST}/#job/{job_id}/run/{run_id}"
 
             if final_status == "SUCCESS":
-                status_box.success("✅ Job completed successfully")
+                box.success("✅ Job completed successfully")
 
-                st.markdown("### 📂 Output Files Generated")
-                for p in get_output_paths(category, params):
-                    st.code(p)
+                st.markdown("### 📂 Output files generated at:")
+                for f in get_output_files(category, params):
+                    st.code(f)
 
             else:
-                status_box.error(f"❌ Job failed: {final_status}")
+                box.error(f"❌ Job failed : {final_status}")
 
-                # 🔁 Retry Button
+                # 🔁 RETRY FAILED JOB
                 if st.button("🔁 Retry Failed Job"):
-                    st.session_state.retry = True
+                    requests.post(
+                        f"{DATABRICKS_HOST}/api/2.2/jobs/run-now",
+                        headers=HEADERS,
+                        json=payload
+                    )
+                    st.info("🔄 Job retriggered")
 
-            st.markdown(f"🔗 **Databricks Job Run:** [{job_url}]({job_url})")
+            # 🔗 JOB URL
+            st.markdown(f"🔗 **Databricks Job Run:** {job_url}")
 
-            logs = get_job_logs(run_id)
-
+            # ✅ INLINE LOG VIEW
+            logs = download_job_logs(run_id)
             with st.expander("📜 View Execution Logs"):
                 st.text(logs)
 
+            # ✅ LOG DOWNLOAD
             st.download_button(
                 "📥 Download Logs",
                 logs,
                 file_name=f"{run_id}_logs.txt"
             )
+
             break
 
         time.sleep(10)
-
 # =========================================================
 # HEADER
 # =========================================================
-st.markdown("# ✅ QA Validation Portal")
+st.markdown("""
+# ✅ QA Validation Portal
+Enterprise‑ready UI for QA validations & testcase generation
+""")
 
 # =========================================================
-# CATEGORY BUTTONS (UNCHANGED UI LOGIC)
+# SIDEBAR – FILE UPLOAD (UNCHANGED)
 # =========================================================
+with st.sidebar:
+    st.header("📂 Upload Files (Auto Job Trigger)")
+
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=["pdf", "txt", "docx", "xlsx"],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files and st.button("🚀 Upload Files"):
+        for file in uploaded_files:
+            try:
+                encoded = base64.b64encode(file.getvalue()).decode("utf-8")
+                payload = {
+                    "path": f"{WORKSPACE_DIR}/{file.name}",
+                    "format": "AUTO",
+                    "overwrite": True,
+                    "content": encoded
+                }
+
+                r = requests.post(
+                    f"{DATABRICKS_HOST}/api/2.0/workspace/import",
+                    headers=HEADERS,
+                    json=payload
+                )
+
+                if r.status_code != 200:
+                    raise RuntimeError(r.text)
+
+                st.success(f"📤 {file.name} uploaded")
+
+            except Exception as e:
+                st.error(str(e))
+
+# =========================================================
+# CATEGORY BUTTONS
+# =========================================================
+st.divider()
 st.subheader("🔹 Select QA Validation Category")
 
+st.markdown("<div class='big-btn'>", unsafe_allow_html=True)
 if st.button("✅ All Validation", use_container_width=True):
     st.session_state.selected = "All Validation"
+st.markdown("</div>", unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
+    st.markdown("<div class='med-btn stm'>", unsafe_allow_html=True)
     if st.button("📄 STM TC Gen", use_container_width=True):
         st.session_state.selected = "STM Test Case Generation"
+    st.markdown("</div>", unsafe_allow_html=True)
+
 with c2:
+    st.markdown("<div class='med-btn scd'>", unsafe_allow_html=True)
     if st.button("🔁 SCD Validation", use_container_width=True):
         st.session_state.selected = "SCD Validation"
+    st.markdown("</div>", unsafe_allow_html=True)
+
 with c3:
+    st.markdown("<div class='med-btn stmval'>", unsafe_allow_html=True)
     if st.button("✅ STM Validation", use_container_width=True):
         st.session_state.selected = "STM Validation"
+    st.markdown("</div>", unsafe_allow_html=True)
+
 with c4:
+    st.markdown("<div class='med-btn scdtc'>", unsafe_allow_html=True)
     if st.button("🧪 SCD TC Gen", use_container_width=True):
         st.session_state.selected = "SCD Testcases Generation"
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
 # DYNAMIC FORM
 # =========================================================
+st.divider()
 category = st.session_state.selected
 job = JOB_CONFIG[category]
 
@@ -204,29 +293,23 @@ st.subheader(f"🛠 {category}")
 with st.form("job_form"):
     inputs = {}
     cols = st.columns(2)
-
     for i, p in enumerate(job["params"]):
         with cols[i % 2]:
-            inputs[p] = (
-                st.selectbox("SCD Type", ["1", "2"])
-                if p == "SCD_TYPE"
-                else st.text_input(p)
-            )
+            if p == "SCD_TYPE":
+                inputs[p] = st.selectbox("SCD Type", ["1", "2"])
+            else:
+                inputs[p] = st.text_input(p)
 
     submit = st.form_submit_button("🚀 Run Job")
 
 # =========================================================
 # JOB TRIGGER
 # =========================================================
-if submit or st.session_state.get("retry"):
-    st.session_state.retry = False
-
+if submit:
     payload = {
         "job_id": job["job_id"],
         "notebook_params": inputs
     }
-
-    st.session_state.last_job_payload = payload
 
     with st.spinner("Triggering job..."):
         r = requests.post(
@@ -239,7 +322,9 @@ if submit or st.session_state.get("retry"):
             st.error(r.text)
         else:
             run_id = r.json()["run_id"]
-            track_job(run_id, category, job["job_id"], inputs)
+            st.success(f"✅ Job Started | Run ID: {run_id}")
+            track_job(run_id,category,job["job_id"],inputs,payload)
+
 
 # =========================================================
 # JOB HISTORY TABLE
@@ -251,4 +336,4 @@ if st.session_state.job_history:
     df = pd.DataFrame(st.session_state.job_history)
     st.dataframe(df, use_container_width=True)
 else:
-    st.info("No jobs executed yet")
+    st.info("No jobs executed yet.")
