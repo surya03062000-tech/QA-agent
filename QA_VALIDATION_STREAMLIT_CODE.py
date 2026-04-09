@@ -44,24 +44,24 @@ JOB_CONFIG = {
     "All Validation": {
         "job_id": 566631342323223,
         "params": [
-            "STM_FILE", "SHEET_NAME", "SOURCE_FILE_PATH", "OUTPUT_FILE_PATH",
+            "STM_FILE", "SHEET_NAME", "SOURCE_FILE",
             "SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"
         ]
     },
     "STM Test Case Generation": {
-        "job_id": 4567,
+        "job_id": 236718714761927,
         "params": ["STM_FILE", "SHEET_NAME"]
     },
     "SCD Validation": {
-        "job_id": 6754,
+        "job_id": 909635921592434,
         "params": ["STM_FILE", "SOURCE_FILE", "SHEET_NAME", "SCD_TYPE"]
     },
     "STM Validation": {
-        "job_id": 4532,
+        "job_id": 190540510295693,
         "params": ["STM_FILE", "SOURCE_FILE", "SHEET_NAME"]
     },
     "SCD Testcases Generation": {
-        "job_id": 54738,
+        "job_id": 160480032307967,
         "params": ["SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"]
     }
 }
