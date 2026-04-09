@@ -12,6 +12,7 @@ st.title("START VALIDATION")
 
 # User inputs
 param1 = st.text_input("STM file path:")
+param11 = st.text_input("SHEET_NAME:")
 param2 = st.text_input("Source file path:")
 param3 = st.text_input("Output Path:")
 param4 = st.text_input("SOURCE_TABLE:")
@@ -26,6 +27,7 @@ if st.button("Run Notebook"):
         "job_id": JOB_ID,
         "notebook_params": {
             "STM_FILE_PATH": param1,
+            "SHEET_NAME": param11,
             "SOURCE_FILE_PATH": param2,
             "OUTPUT_FILE_PATH": param3,
             "SOURCE_TABLE": param4,
