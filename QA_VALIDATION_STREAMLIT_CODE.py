@@ -7,20 +7,17 @@ import base64
 # PAGE CONFIG
 # =========================================================
 st.set_page_config(
-    page_title="Databricks Validation Portal",
+    page_title="QA Validation Portal",
     page_icon="✅",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # =========================================================
-# CONSTANTS (USE st.secrets IN PROD)
+# DATABRICKS CONFIG
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapi180370eb25ac521baee3f96924db98e9"
-
-VALIDATION_JOB_ID = 566631342323223
-FILE_JOB_ID = 1095682687953224
+TOKEN = "dapiXXXXXXXXXXXX"   # use st.secrets in prod
 
 WORKSPACE_DIR = "/Shared/uploads"
 
@@ -30,48 +27,76 @@ HEADERS = {
 }
 
 # =========================================================
-# REUSABLE: JOB STATUS TRACKER
+# JOB CONFIGURATION
 # =========================================================
-def track_job_status(run_id, label):
-    status_container = st.container()
+JOB_CONFIG = {
+    "All Validation": {
+        "job_id": 566631342323223,
+        "params": [
+            "STM_FILE", "SHEET_NAME", "SOURCE_FILE_PATH", "OUTPUT_FILE_PATH",
+            "SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"
+        ]
+    },
+    "STM Test Case Generation": {
+        "job_id": 4567,
+        "params": ["STM_FILE", "SHEET_NAME"]
+    },
+    "SCD Validation": {
+        "job_id": 6754,
+        "params": ["STM_FILE", "SOURCE_FILE", "SHEET_NAME", "SCD_TYPE"]
+    },
+    "STM Validation": {
+        "job_id": 4532,
+        "params": ["STM_FILE", "SOURCE_FILE", "SHEET_NAME"]
+    },
+    "SCD Testcases Generation": {
+        "job_id": 54738,
+        "params": ["SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"]
+    }
+}
 
+# =========================================================
+# JOB STATUS TRACKER
+# =========================================================
+def track_job(run_id, label):
+    box = st.empty()
     while True:
-        resp = requests.get(
+        r = requests.get(
             f"{DATABRICKS_HOST}/api/2.2/jobs/runs/get?run_id={run_id}",
             headers=HEADERS
         )
 
-        if resp.status_code != 200:
-            status_container.error(f"❌ {label}: Unable to fetch job status")
+        if r.status_code != 200:
+            box.error("❌ Unable to fetch job status")
             break
 
-        state = resp.json()["state"]["life_cycle_state"]
-        result = resp.json()["state"].get("result_state")
+        state = r.json()["state"]["life_cycle_state"]
+        result = r.json()["state"].get("result_state")
 
-        if state in ["PENDING", "RUNNING"]:
-            status_container.info(f"⏳ {label} status: {state}")
-        else:
+        box.info(f"⏳ {label} : {state}")
+
+        if state in ["TERMINATED", "SKIPPED", "INTERNAL_ERROR"]:
             if result == "SUCCESS":
-                status_container.success(f"✅ {label} completed successfully")
+                box.success(f"✅ {label} completed successfully")
             else:
-                status_container.error(f"❌ {label} failed: {result}")
+                box.error(f"❌ {label} failed : {result}")
             break
 
-        time.sleep(15)
+        time.sleep(10)
 
 # =========================================================
 # HEADER
 # =========================================================
 st.markdown("""
-# ✅ Databricks Validation Portal
-Modern UI to trigger **File Ingestion Jobs** and **Validation Jobs**
+# ✅ QA Validation Portal
+Enterprise‑grade UI for validations & testcase generation
 """)
 
 # =========================================================
-# SIDEBAR – FILE UPLOAD (AUTO JOB + STATUS)
+# SIDEBAR – FILE UPLOAD (UNCHANGED)
 # =========================================================
 with st.sidebar:
-    st.header("📂 Upload Files (Auto Job Trigger)")
+    st.header("📂 Upload Files (Auto Job)")
 
     uploaded_files = st.file_uploader(
         "Upload files",
@@ -79,108 +104,101 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-    if uploaded_files and st.button("🚀 Upload & Trigger Job"):
+    if uploaded_files and st.button("🚀 Upload & Trigger File Job"):
         for file in uploaded_files:
             try:
-                # Encode file
                 encoded = base64.b64encode(file.getvalue()).decode("utf-8")
-
-                # Upload to workspace
-                upload_payload = {
+                payload = {
                     "path": f"{WORKSPACE_DIR}/{file.name}",
                     "format": "AUTO",
                     "overwrite": True,
                     "content": encoded
                 }
 
-                upload_resp = requests.post(
+                r = requests.post(
                     f"{DATABRICKS_HOST}/api/2.0/workspace/import",
                     headers=HEADERS,
-                    json=upload_payload
+                    json=payload
                 )
 
-                if upload_resp.status_code != 200:
-                    raise RuntimeError(upload_resp.text)
+                if r.status_code != 200:
+                    raise RuntimeError(r.text)
 
-                # Trigger file job
-                trigger_payload = {
-                    "job_id": FILE_JOB_ID,
-                    "notebook_params": {
-                        "workspace_file_path": upload_payload["path"]
-                    }
-                }
-
-                job_resp = requests.post(
-                    f"{DATABRICKS_HOST}/api/2.1/jobs/run-now",
-                    headers=HEADERS,
-                    json=trigger_payload
-                )
-
-                if job_resp.status_code != 200:
-                    raise RuntimeError(job_resp.text)
-
-                run_id = job_resp.json().get("run_id")
-
-                st.success(f"📤 {file.name} uploaded. Job started (Run ID: {run_id})")
-
-                # Track file job status
-                track_job_status(run_id, label=f"File Job ({file.name})")
+                st.success(f"📤 {file.name} uploaded")
 
             except Exception as e:
-                st.error(f"❌ {file.name}: {e}")
+                st.error(str(e))
 
 # =========================================================
-# MAIN – MANUAL VALIDATION JOB
+# CATEGORY BUTTONS (UI)
 # =========================================================
 st.divider()
-st.subheader("🛠 Manual Validation Job Trigger")
+st.subheader("🔹 Select QA Validation Category")
 
-with st.form("validation_form"):
-    c1, c2 = st.columns(2)
+if "selected" not in st.session_state:
+    st.session_state.selected = "All Validation"
 
-    with c1:
-        STM_FILE = st.text_input("STM File Path")
-        SHEET_NAME = st.text_input("Sheet Name")
-        SOURCE_FILE_PATH = st.text_input("Source File Path")
-        OUTPUT_FILE_PATH = st.text_input("Output Path")
+# BIG BUTTON
+if st.button("✅ All Validation", use_container_width=True):
+    st.session_state.selected = "All Validation"
 
-    with c2:
-        SOURCE_TABLE = st.text_input("Source Table")
-        TARGET_TABLE = st.text_input("Target Table")
-        PRIMARY_KEYS = st.text_input("Primary Keys")
-        SCD_TYPE = st.selectbox("SCD Type", ["1", "2"])
+c1, c2, c3, c4 = st.columns(4)
 
-    submit = st.form_submit_button("🚀 Run Validation Job")
+with c1:
+    if st.button("📄 STM TC Gen"):
+        st.session_state.selected = "STM Test Case Generation"
+with c2:
+    if st.button("🔁 SCD Validation"):
+        st.session_state.selected = "SCD Validation"
+with c3:
+    if st.button("✅ STM Validation"):
+        st.session_state.selected = "STM Validation"
+with c4:
+    if st.button("🧪 SCD TC Gen"):
+        st.session_state.selected = "SCD Testcases Generation"
+
+st.divider()
 
 # =========================================================
-# VALIDATION JOB EXECUTION + STATUS
+# DYNAMIC FORM
+# =========================================================
+category = st.session_state.selected
+job = JOB_CONFIG[category]
+
+st.subheader(f"🛠 {category}")
+
+with st.form("job_form"):
+    inputs = {}
+    cols = st.columns(2)
+
+    for i, p in enumerate(job["params"]):
+        with cols[i % 2]:
+            if p == "SCD_TYPE":
+                inputs[p] = st.selectbox("SCD Type", ["1", "2"])
+            else:
+                inputs[p] = st.text_input(p)
+
+    submit = st.form_submit_button("🚀 Run Job")
+
+# =========================================================
+# JOB TRIGGER + STATUS
 # =========================================================
 if submit:
-    with st.spinner("Triggering validation job..."):
-        payload = {
-            "job_id": VALIDATION_JOB_ID,
-            "notebook_params": {
-                "STM_FILE": STM_FILE,
-                "SHEET_NAME": SHEET_NAME,
-                "SOURCE_FILE_PATH": SOURCE_FILE_PATH,
-                "OUTPUT_FILE_PATH": OUTPUT_FILE_PATH,
-                "SOURCE_TABLE": SOURCE_TABLE,
-                "TARGET_TABLE": TARGET_TABLE,
-                "PRIMARY_KEYS": PRIMARY_KEYS,
-                "SCD_TYPE": SCD_TYPE
-            }
-        }
+    payload = {
+        "job_id": job["job_id"],
+        "notebook_params": inputs
+    }
 
-        resp = requests.post(
+    with st.spinner("Triggering job..."):
+        r = requests.post(
             f"{DATABRICKS_HOST}/api/2.2/jobs/run-now",
             headers=HEADERS,
             json=payload
         )
 
-        if resp.status_code != 200:
-            st.error(resp.text)
+        if r.status_code != 200:
+            st.error(r.text)
         else:
-            run_id = resp.json().get("run_id")
-            st.success(f"✅ Validation job started (Run ID: {run_id})")
-
-            track_job_status(run_id, label="Validation Job")
+            run_id = r.json()["run_id"]
+            st.success(f"✅ Job Started | Run ID: {run_id}")
+            track_job(run_id, category)
