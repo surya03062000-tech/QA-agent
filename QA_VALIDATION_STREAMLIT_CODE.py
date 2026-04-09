@@ -17,7 +17,7 @@ st.set_page_config(
 # CONSTANTS (USE st.secrets IN PROD)
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapiXXXXXXXXXXXX"
+TOKEN = "dapi180370eb25ac521baee3f96924db98e9"
 
 VALIDATION_JOB_ID = 566631342323223
 FILE_JOB_ID = 1095682687953224
