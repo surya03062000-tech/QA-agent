@@ -4,9 +4,9 @@ import requests
 import time
 
 # Databricks credentials
-DATABRICKS_INSTANCE = "https://dbc-7c82be33-847c.cloud.databricks.com"
-TOKEN = "dapib0936ff745e3a10c23c4b0264876090e"
-JOB_ID = "813058467048815"
+DATABRICKS_INSTANCE = "https://dbc-927300a1-adc8.cloud.databricks.com"
+TOKEN = "dapi180370eb25ac521baee3f96924db98e9"
+JOB_ID = "566631342323223"
 
 st.title("START VALIDATION")
 
