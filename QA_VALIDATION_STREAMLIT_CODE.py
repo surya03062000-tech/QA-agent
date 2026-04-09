@@ -19,7 +19,7 @@ st.set_page_config(
 # DATABRICKS CONFIG
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapiXXXXXXXXXXXXXXXX"  # ✅ move to st.secrets in prod
+TOKEN = "dapi180370eb25ac521baee3f96924db98e9"  # ✅ move to st.secrets in prod
 
 WORKSPACE_DIR = "/Shared/uploads"
 
