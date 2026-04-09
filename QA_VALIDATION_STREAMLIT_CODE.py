@@ -26,7 +26,7 @@ if st.button("Run Notebook"):
     payload = {
         "job_id": JOB_ID,
         "notebook_params": {
-            "STM_FILE_PATH": param1,
+            "STM_FILE": param1,
             "SHEET_NAME": param11,
             "SOURCE_FILE_PATH": param2,
             "OUTPUT_FILE_PATH": param3,
