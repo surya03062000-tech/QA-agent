@@ -19,8 +19,7 @@ st.set_page_config(
 # DATABRICKS CONFIG
 # =========================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN = "dapi180370eb25ac521baee3f96924db98e9"  # ✅ move to st.secrets in prod
-
+TOKEN = "dapi180370eb25ac521baee3f96924db98e9"   # ✅ move to st.secrets in prod
 WORKSPACE_DIR = "/Shared/uploads"
 
 HEADERS = {
@@ -65,32 +64,41 @@ JOB_CONFIG = {
         "params": ["SOURCE_TABLE", "TARGET_TABLE", "PRIMARY_KEYS", "SCD_TYPE"]
     }
 }
+
 # =========================================================
-# OUTPUT FILE PATHS (CATEGORY WISE)
+# CLEAN FILE NAME
+# =========================================================
+def clean_name(name):
+    if not name:
+        return ""
+    for ext in [".xlsx", ".xls", ".csv"]:
+        name = name.replace(ext, "")
+    return name.strip()
+
+# =========================================================
+# OUTPUT FILE PATHS
 # =========================================================
 def get_output_files(category, params):
     base = "/Volumes/edl_qa/qa_agent/qa_validation"
 
+    stm = clean_name(params.get("STM_FILE"))
+    tgt = clean_name(params.get("TARGET_TABLE"))
+
     if category == "All Validation":
         return [
-            f"{base}/{params.get('STM_FILE')}_STM_Testcases.xlsx",
-            f"{base}/{params.get('TARGET_TABLE')}_SCD_Validation.xlsx",
-            f"{base}/{params.get('TARGET_TABLE')}_SCD_Testcases.xlsx",
-            f"{base}/{params.get('TARGET_TABLE')}_STM_vs_Target_final_output.xlsx",
+            f"{base}/{stm}_STM_Testcases.xlsx",
+            f"{base}/{tgt}_SCD_Validation.xlsx",
+            f"{base}/{tgt}_SCD_Testcases.xlsx",
+            f"{base}/{tgt}_STM_vs_Target_final_output.xlsx",
         ]
-
     if category == "STM Test Case Generation":
-        return [f"{base}/{params.get('STM_FILE')}_STM_Testcases.xlsx"]
-
+        return [f"{base}/{stm}_STM_Testcases.xlsx"]
     if category == "SCD Validation":
-        return [f"{base}/{params.get('TARGET_TABLE')}_SCD_Validation.xlsx"]
-
+        return [f"{base}/{tgt}_SCD_Validation.xlsx"]
     if category == "SCD Testcases Generation":
-        return [f"{base}/{params.get('TARGET_TABLE')}_SCD_Testcases.xlsx"]
-
+        return [f"{base}/{tgt}_SCD_Testcases.xlsx"]
     if category == "STM Validation":
-        return [f"{base}/{params.get('TARGET_TABLE')}_STM_vs_Target_final_output.xlsx"]
-
+        return [f"{base}/{tgt}_STM_vs_Target_final_output.xlsx"]
     return []
 # =========================================================
 # CUSTOM CSS (BUTTON COLOR + SIZE)
@@ -121,7 +129,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# JOB LOG DOWNLOAD
+# SAFE LOG FETCH
 # =========================================================
 def download_job_logs(run_id):
     r = requests.get(
@@ -130,13 +138,13 @@ def download_job_logs(run_id):
     )
     if r.status_code != 200:
         return None
-    return r.json().get("logs", "No logs available")
+    return str(r.json().get("logs", ""))
 
 # =========================================================
-# JOB STATUS TRACKER + HISTORY
+# JOB STATUS TRACKER
 # =========================================================
 def track_job(run_id, category, job_id, params, payload):
-    box = st.empty()
+    status_box = st.empty()
 
     while True:
         r = requests.get(
@@ -147,7 +155,7 @@ def track_job(run_id, category, job_id, params, payload):
         state = r.json()["state"]["life_cycle_state"]
         result = r.json()["state"].get("result_state")
 
-        box.info(f"⏳ {category} Status : {state}")
+        status_box.info(f"⏳ {category} Status : {state}")
 
         if state in ["TERMINATED", "SKIPPED", "INTERNAL_ERROR"]:
             final_status = result or state
@@ -163,16 +171,12 @@ def track_job(run_id, category, job_id, params, payload):
             job_url = f"{DATABRICKS_HOST}/#job/{job_id}/run/{run_id}"
 
             if final_status == "SUCCESS":
-                box.success("✅ Job completed successfully")
-
+                status_box.success("✅ Job completed successfully")
                 st.markdown("### 📂 Output files generated at:")
                 for f in get_output_files(category, params):
                     st.code(f)
-
             else:
-                box.error(f"❌ Job failed : {final_status}")
-
-                # 🔁 RETRY FAILED JOB
+                status_box.error(f"❌ Job failed : {final_status}")
                 if st.button("🔁 Retry Failed Job"):
                     requests.post(
                         f"{DATABRICKS_HOST}/api/2.2/jobs/run-now",
@@ -181,24 +185,23 @@ def track_job(run_id, category, job_id, params, payload):
                     )
                     st.info("🔄 Job retriggered")
 
-            # 🔗 JOB URL
             st.markdown(f"🔗 **Databricks Job Run:** {job_url}")
 
-            # ✅ INLINE LOG VIEW
             logs = download_job_logs(run_id)
             with st.expander("📜 View Execution Logs"):
-                st.text(logs)
+                st.text(logs if logs else "No logs available")
 
-            # ✅ LOG DOWNLOAD
-            st.download_button(
-                "📥 Download Logs",
-                logs,
-                file_name=f"{run_id}_logs.txt"
-            )
-
+            if logs:
+                st.download_button(
+                    "📥 Download Logs",
+                    data=logs,
+                    file_name=f"{run_id}_logs.txt",
+                    mime="text/plain"
+                )
             break
 
         time.sleep(10)
+
 # =========================================================
 # HEADER
 # =========================================================
@@ -208,18 +211,18 @@ Enterprise‑ready UI for QA validations & testcase generation
 """)
 
 # =========================================================
-# SIDEBAR – FILE UPLOAD (UNCHANGED)
+# ✅ SIDEBAR (FILE UPLOAD)
 # =========================================================
 with st.sidebar:
-    st.header("📂 Upload Files (Auto Job Trigger)")
+    st.header("📂 Upload Files (Workspace)")
 
     uploaded_files = st.file_uploader(
         "Upload files",
-        type=["pdf", "txt", "docx", "xlsx"],
+        type=["pdf", "txt", "docx", "xlsx", "csv"],
         accept_multiple_files=True
     )
 
-    if uploaded_files and st.button("🚀 Upload Files"):
+    if uploaded_files and st.button("🚀 Upload"):
         for file in uploaded_files:
             try:
                 encoded = base64.b64encode(file.getvalue()).decode("utf-8")
@@ -239,13 +242,12 @@ with st.sidebar:
                 if r.status_code != 200:
                     raise RuntimeError(r.text)
 
-                st.success(f"📤 {file.name} uploaded")
-
+                st.success(f"✅ Uploaded: {file.name}")
             except Exception as e:
                 st.error(str(e))
 
 # =========================================================
-# CATEGORY BUTTONS
+# CATEGORY SELECTION
 # =========================================================
 st.divider()
 st.subheader("🔹 Select QA Validation Category")
@@ -280,7 +282,6 @@ with c4:
     if st.button("🧪 SCD TC Gen", use_container_width=True):
         st.session_state.selected = "SCD Testcases Generation"
     st.markdown("</div>", unsafe_allow_html=True)
-
 # =========================================================
 # DYNAMIC FORM
 # =========================================================
@@ -323,11 +324,10 @@ if submit:
         else:
             run_id = r.json()["run_id"]
             st.success(f"✅ Job Started | Run ID: {run_id}")
-            track_job(run_id,category,job["job_id"],inputs,payload)
-
+            track_job(run_id, category, job["job_id"], inputs, payload)
 
 # =========================================================
-# JOB HISTORY TABLE
+# JOB HISTORY
 # =========================================================
 st.divider()
 st.subheader("📊 Job Execution History")
