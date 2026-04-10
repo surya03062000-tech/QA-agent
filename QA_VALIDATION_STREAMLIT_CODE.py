@@ -140,7 +140,35 @@ def download_job_logs(run_id):
     if r.status_code != 200:
         return None
     return str(r.json().get("logs", ""))
+# =========================================================
+# REUSABLE: JOB STATUS TRACKER
+# =========================================================
+def track_job_status(run_id, label):
+    status_container = st.container()
 
+    while True:
+        resp = requests.get(
+            f"{DATABRICKS_HOST}/api/2.2/jobs/runs/get?run_id={run_id}",
+            headers=HEADERS
+        )
+
+        if resp.status_code != 200:
+            status_container.error(f"❌ {label}: Unable to fetch job status")
+            break
+
+        state = resp.json()["state"]["life_cycle_state"]
+        result = resp.json()["state"].get("result_state")
+
+        if state in ["PENDING", "RUNNING"]:
+            status_container.info(f"⏳ {label} status: {state}")
+        else:
+            if result == "SUCCESS":
+                status_container.success(f"✅ {label} completed successfully")
+            else:
+                status_container.error(f"❌ {label} failed: {result}")
+            break
+
+        time.sleep(15)
 # =========================================================
 # JOB STATUS TRACKER
 # =========================================================
