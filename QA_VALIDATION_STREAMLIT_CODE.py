@@ -21,6 +21,7 @@ st.set_page_config(
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
 TOKEN = "dapi180370eb25ac521baee3f96924db98e9"   # ✅ move to st.secrets in prod
 WORKSPACE_DIR = "/Shared/uploads"
+FILE_JOB_ID = 1095682687953224
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
@@ -209,43 +210,67 @@ st.markdown("""
 # ✅ QA Validation Portal
 Enterprise‑ready UI for QA validations & testcase generation
 """)
-
 # =========================================================
-# ✅ SIDEBAR (FILE UPLOAD)
+# SIDEBAR – FILE UPLOAD (AUTO JOB + STATUS)
 # =========================================================
 with st.sidebar:
-    st.header("📂 Upload Files (Workspace)")
+    st.header("📂 Upload Files (Auto Job Trigger)")
 
     uploaded_files = st.file_uploader(
         "Upload files",
-        type=["pdf", "txt", "docx", "xlsx", "csv"],
+        type=["pdf", "txt", "docx", "xlsx"],
         accept_multiple_files=True
     )
 
-    if uploaded_files and st.button("🚀 Upload"):
+    if uploaded_files and st.button("🚀 Upload & Trigger Job"):
         for file in uploaded_files:
             try:
+                # Encode file
                 encoded = base64.b64encode(file.getvalue()).decode("utf-8")
-                payload = {
+
+                # Upload to workspace
+                upload_payload = {
                     "path": f"{WORKSPACE_DIR}/{file.name}",
                     "format": "AUTO",
                     "overwrite": True,
                     "content": encoded
                 }
 
-                r = requests.post(
+                upload_resp = requests.post(
                     f"{DATABRICKS_HOST}/api/2.0/workspace/import",
                     headers=HEADERS,
-                    json=payload
+                    json=upload_payload
                 )
 
-                if r.status_code != 200:
-                    raise RuntimeError(r.text)
+                if upload_resp.status_code != 200:
+                    raise RuntimeError(upload_resp.text)
 
-                st.success(f"✅ Uploaded: {file.name}")
+                # Trigger file job
+                trigger_payload = {
+                    "job_id": FILE_JOB_ID,
+                    "notebook_params": {
+                        "workspace_file_path": upload_payload["path"]
+                    }
+                }
+
+                job_resp = requests.post(
+                    f"{DATABRICKS_HOST}/api/2.1/jobs/run-now",
+                    headers=HEADERS,
+                    json=trigger_payload
+                )
+
+                if job_resp.status_code != 200:
+                    raise RuntimeError(job_resp.text)
+
+                run_id = job_resp.json().get("run_id")
+
+                st.success(f"📤 {file.name} uploaded. Job started (Run ID: {run_id})")
+
+                # Track file job status
+                track_job_status(run_id, label=f"File Job ({file.name})")
+
             except Exception as e:
-                st.error(str(e))
-
+                st.error(f"❌ {file.name}: {e}")
 # =========================================================
 # CATEGORY SELECTION
 # =========================================================
