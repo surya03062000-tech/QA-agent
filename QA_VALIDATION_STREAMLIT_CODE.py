@@ -309,7 +309,7 @@ with st.sidebar:
     st.caption("Trigger download job and fetch output files")
 
     # ---- Your separate DOWNLOAD job id ----
-    DOWNLOAD_JOB_ID = 1234567890123   # 🔴 change this
+    DOWNLOAD_JOB_ID = 952316325801350   # 🔴 change this
 
     # ---- Inputs (same as main job) ----
     category = st.selectbox(
