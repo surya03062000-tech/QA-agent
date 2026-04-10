@@ -312,18 +312,17 @@ with st.sidebar:
         placeholder="/Volumes/edl_qa/qa_agent/qa_validation/example.xlsx"
     )
 
-    def read_volume_file(path):
-        dbfs_path = f"/dbfs{path}"
+    def read_uc_volume_file(volume_path):
         offset = 0
-        chunk_size = 1024 * 1024  # 1MB
-        file_bytes = b""
+        chunk_size = 1024 * 1024  # 1 MB
+        content = b""
 
         while True:
             resp = requests.get(
-                f"{DATABRICKS_HOST}/api/2.0/dbfs/read",
+                f"{DATABRICKS_HOST}/api/2.0/files/read",
                 headers=HEADERS,
                 params={
-                    "path": dbfs_path,
+                    "path": volume_path,
                     "offset": offset,
                     "length": chunk_size
                 },
@@ -338,28 +337,28 @@ with st.sidebar:
                 break
 
             chunk = base64.b64decode(data)
-            file_bytes += chunk
+            content += chunk
 
             if len(chunk) < chunk_size:
                 break
 
             offset += chunk_size
 
-        return file_bytes
+        return content
 
     if file_path:
         try:
             file_name = file_path.split("/")[-1]
-            file_content = read_volume_file(file_path)
+            file_bytes = read_uc_volume_file(file_path)
 
-            if not file_content:
-                st.error("❌ File is empty or not found")
+            if not file_bytes:
+                st.error("❌ File is empty or unavailable")
             else:
-                st.success("✅ File ready")
+                st.success("✅ File ready for download")
 
                 st.download_button(
-                    label="⬇️ Download File",
-                    data=file_content,
+                    "⬇️ Download File",
+                    data=file_bytes,
                     file_name=file_name,
                     mime="application/octet-stream"
                 )
