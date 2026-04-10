@@ -304,64 +304,97 @@ with st.sidebar:
 # ✅ RIGHT SIDEBAR – OUTPUT FILE DOWNLOAD
 # =========================================================
 with st.sidebar:
-    st.divider()
-    st.subheader("📥 Download Output File")
+    st.header("📥 Download QA Output Files")
 
-    file_path = st.text_input(
-        "Enter Volume file path",
-        placeholder="/Volumes/edl_qa/qa_agent/qa_validation/example.xlsx"
+    st.caption("Trigger download job and fetch output files")
+
+    # ---- Your separate DOWNLOAD job id ----
+    DOWNLOAD_JOB_ID = 1234567890123   # 🔴 change this
+
+    # ---- Inputs (same as main job) ----
+    category = st.selectbox(
+        "Category",
+        [
+            "All Validation",
+            "STM Test Case Generation",
+            "SCD Validation",
+            "STM Validation",
+            "SCD Testcases Generation",
+        ]
     )
 
-    def read_uc_volume_file(volume_path):
-        offset = 0
-        chunk_size = 1024 * 1024  # 1 MB
-        content = b""
+    stm_file = st.text_input("STM_FILE (optional)")
+    target_table = st.text_input("TARGET_TABLE (optional)")
 
-        while True:
-            resp = requests.get(
-                f"{DATABRICKS_HOST}/api/2.0/files/read",
+    # ---- Trigger download job ----
+    if st.button("🚀 Prepare Files (Run Download Job)"):
+        try:
+            payload = {
+                "job_id": DOWNLOAD_JOB_ID,
+                "notebook_params": {
+                    "CATEGORY": category,
+                    "STM_FILE": stm_file,
+                    "TARGET_TABLE": target_table
+                }
+            }
+
+            resp = requests.post(
+                f"{DATABRICKS_HOST}/api/2.2/jobs/run-now",
                 headers=HEADERS,
-                params={
-                    "path": volume_path,
-                    "offset": offset,
-                    "length": chunk_size
-                },
-                timeout=60
+                json=payload
             )
 
             if resp.status_code != 200:
-                raise RuntimeError(resp.text)
-
-            data = resp.json().get("data")
-            if not data:
-                break
-
-            chunk = base64.b64decode(data)
-            content += chunk
-
-            if len(chunk) < chunk_size:
-                break
-
-            offset += chunk_size
-
-        return content
-
-    if file_path:
-        try:
-            file_name = file_path.split("/")[-1]
-            file_bytes = read_uc_volume_file(file_path)
-
-            if not file_bytes:
-                st.error("❌ File is empty or unavailable")
+                st.error(resp.text)
             else:
-                st.success("✅ File ready for download")
+                run_id = resp.json()["run_id"]
+                st.success(f"✅ Download job triggered (Run ID: {run_id})")
 
-                st.download_button(
-                    "⬇️ Download File",
-                    data=file_bytes,
-                    file_name=file_name,
-                    mime="application/octet-stream"
-                )
+                st.info("⏳ Please wait… files are being prepared in Workspace")
+
+        except Exception as e:
+            st.error(f"❌ {e}")
+
+    st.divider()
+
+    # ---- Workspace download path ----
+    st.subheader("⬇️ Download Files")
+
+    workspace_file_path = st.text_input(
+        "Workspace file path",
+        placeholder="/Workspace/Shared/qa_output_downloads/example.xlsx"
+    )
+
+    def download_workspace_file(path):
+        payload = {
+            "path": path,
+            "format": "AUTO"
+        }
+
+        resp = requests.post(
+            f"{DATABRICKS_HOST}/api/2.0/workspace/export",
+            headers=HEADERS,
+            json=payload
+        )
+
+        if resp.status_code != 200:
+            raise RuntimeError(resp.text)
+
+        return base64.b64decode(resp.json()["content"])
+
+    if workspace_file_path:
+        try:
+            file_name = workspace_file_path.split("/")[-1]
+            file_bytes = download_workspace_file(workspace_file_path)
+
+            st.success("✅ File ready for download")
+
+            st.download_button(
+                label="⬇️ Download File",
+                data=file_bytes,
+                file_name=file_name,
+                mime="application/octet-stream"
+            )
 
         except Exception as e:
             st.error(f"❌ Unable to download file: {e}")
