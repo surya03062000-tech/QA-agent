@@ -365,39 +365,60 @@ with st.sidebar:
         placeholder="/Workspace/Shared/qa_output_downloads/example.xlsx"
     )
 
-    def download_workspace_file(path):
+with st.sidebar:
+    st.divider()
+    st.subheader("📥 Download Output Files")
+
+    WORKSPACE_OUTPUT_DIR = "/Workspace/Users/surya03062000@gmail.com/QA_Final/qa_output_downloads"
+
+    def list_workspace_files(folder):
+        resp = requests.get(
+            f"{DATABRICKS_HOST}/api/2.0/workspace/list",
+            headers=HEADERS,
+            params={"path": folder}
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(resp.text)
+        return resp.json().get("objects", [])
+
+    def download_workspace_file(file_path):
         payload = {
-            "path": path,
+            "path": file_path,
             "format": "AUTO"
         }
-
         resp = requests.post(
             f"{DATABRICKS_HOST}/api/2.0/workspace/export",
             headers=HEADERS,
             json=payload
         )
-
         if resp.status_code != 200:
             raise RuntimeError(resp.text)
-
         return base64.b64decode(resp.json()["content"])
 
-    if workspace_file_path:
-        try:
-            file_name = workspace_file_path.split("/")[-1]
-            file_bytes = download_workspace_file(workspace_file_path)
+    try:
+        files = list_workspace_files(WORKSPACE_OUTPUT_DIR)
 
-            st.success("✅ File ready for download")
+        if not files:
+            st.info("No files available yet")
+        else:
+            st.success("✅ Output files ready")
 
-            st.download_button(
-                label="⬇️ Download File",
-                data=file_bytes,
-                file_name=file_name,
-                mime="application/octet-stream"
-            )
+            for f in files:
+                if f["object_type"] == "FILE":
+                    file_path = f["path"]
+                    file_name = f["path"].split("/")[-1]
 
-        except Exception as e:
-            st.error(f"❌ Unable to download file: {e}")
+                    file_bytes = download_workspace_file(file_path)
+
+                    st.download_button(
+                        label=f"⬇️ {file_name}",
+                        data=file_bytes,
+                        file_name=file_name,
+                        mime="application/octet-stream"
+                    )
+
+    except Exception as e:
+        st.error(f"❌ Unable to fetch files: {e}")
 # =========================================================
 # CATEGORY SELECTION
 # =========================================================
