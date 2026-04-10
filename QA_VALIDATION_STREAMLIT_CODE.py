@@ -250,7 +250,7 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-    if uploaded_files and st.button("🚀 Upload & Trigger Job"):
+    if uploaded_files and st.button("🚀 Upload & Trigger Validation"):
         for file in uploaded_files:
             try:
                 # Encode file
