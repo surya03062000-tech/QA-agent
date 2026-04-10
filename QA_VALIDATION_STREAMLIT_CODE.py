@@ -305,7 +305,7 @@ with st.sidebar:
 # =========================================================
 with st.sidebar:
     st.divider()
-    st.subheader("📥 Download Output Files")
+    st.subheader("📥 Download Output File")
 
     file_path = st.text_input(
         "Enter Volume file path",
@@ -313,53 +313,56 @@ with st.sidebar:
     )
 
     def read_volume_file(path):
-        # Convert Volume path → dbfs path
         dbfs_path = f"/dbfs{path}"
-
-        data = b""
         offset = 0
-        chunk_size = 1048576  # 1 MB
+        chunk_size = 1024 * 1024  # 1MB
+        file_bytes = b""
 
         while True:
-            payload = {
-                "path": dbfs_path,
-                "offset": offset,
-                "length": chunk_size
-            }
-
-            resp = requests.post(
+            resp = requests.get(
                 f"{DATABRICKS_HOST}/api/2.0/dbfs/read",
                 headers=HEADERS,
-                json=payload
+                params={
+                    "path": dbfs_path,
+                    "offset": offset,
+                    "length": chunk_size
+                },
+                timeout=60
             )
 
             if resp.status_code != 200:
                 raise RuntimeError(resp.text)
 
-            chunk = base64.b64decode(resp.json()["data"])
-            data += chunk
+            data = resp.json().get("data")
+            if not data:
+                break
+
+            chunk = base64.b64decode(data)
+            file_bytes += chunk
 
             if len(chunk) < chunk_size:
                 break
 
             offset += chunk_size
 
-        return data
+        return file_bytes
 
     if file_path:
-        file_name = file_path.split("/")[-1]
-
         try:
-            file_bytes = read_volume_file(file_path)
+            file_name = file_path.split("/")[-1]
+            file_content = read_volume_file(file_path)
 
-            st.success("✅ File ready for download")
+            if not file_content:
+                st.error("❌ File is empty or not found")
+            else:
+                st.success("✅ File ready")
 
-            st.download_button(
-                label="⬇️ Download File",
-                data=file_bytes,
-                file_name=file_name,
-                mime="application/octet-stream"
-            )
+                st.download_button(
+                    label="⬇️ Download File",
+                    data=file_content,
+                    file_name=file_name,
+                    mime="application/octet-stream"
+                )
 
         except Exception as e:
             st.error(f"❌ Unable to download file: {e}")
