@@ -299,6 +299,70 @@ with st.sidebar:
 
             except Exception as e:
                 st.error(f"❌ {file.name}: {e}")
+
+# =========================================================
+# ✅ RIGHT SIDEBAR – OUTPUT FILE DOWNLOAD
+# =========================================================
+with st.sidebar:
+    st.divider()
+    st.subheader("📥 Download Output Files")
+
+    file_path = st.text_input(
+        "Enter Volume file path",
+        placeholder="/Volumes/edl_qa/qa_agent/qa_validation/example.xlsx"
+    )
+
+    def read_volume_file(path):
+        # Convert Volume path → dbfs path
+        dbfs_path = f"/dbfs{path}"
+
+        data = b""
+        offset = 0
+        chunk_size = 1048576  # 1 MB
+
+        while True:
+            payload = {
+                "path": dbfs_path,
+                "offset": offset,
+                "length": chunk_size
+            }
+
+            resp = requests.post(
+                f"{DATABRICKS_HOST}/api/2.0/dbfs/read",
+                headers=HEADERS,
+                json=payload
+            )
+
+            if resp.status_code != 200:
+                raise RuntimeError(resp.text)
+
+            chunk = base64.b64decode(resp.json()["data"])
+            data += chunk
+
+            if len(chunk) < chunk_size:
+                break
+
+            offset += chunk_size
+
+        return data
+
+    if file_path:
+        file_name = file_path.split("/")[-1]
+
+        try:
+            file_bytes = read_volume_file(file_path)
+
+            st.success("✅ File ready for download")
+
+            st.download_button(
+                label="⬇️ Download File",
+                data=file_bytes,
+                file_name=file_name,
+                mime="application/octet-stream"
+            )
+
+        except Exception as e:
+            st.error(f"❌ Unable to download file: {e}")
 # =========================================================
 # CATEGORY SELECTION
 # =========================================================
