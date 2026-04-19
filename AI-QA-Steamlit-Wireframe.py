@@ -30,7 +30,7 @@ TOKEN           = "dapi180370eb25ac521baee3f96924db98e9"
 VOLUME_PATH     = "/Volumes/edl_qa/qa_agent/qa_validation_input"
 
 # Job IDs ------------------------------------------------------------------
-SUMMARY_JOB_ID  = 408448156916986          # summary job (chains next jobs on backend)
+SUMMARY_JOB_ID  = 1095682687953224          # summary job (chains next jobs on backend)
 
 JOB_IDS = {
     "Run All Validation" : 566631342323223,
