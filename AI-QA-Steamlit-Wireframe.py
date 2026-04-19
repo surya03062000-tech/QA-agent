@@ -39,7 +39,7 @@ VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
 
 # Job IDs -----------------------------------------------------------------
 FILE_COPY_JOB_ID = 1095682687953224        # copies workspace → volume
-SUMMARY_JOB_ID   = 408448156916986         # STM summarizer
+SUMMARY_JOB_ID   = 1095682687953224         # STM summarizer
 
 JOB_IDS = {
     "Run All Validation" : 566631342323223,
