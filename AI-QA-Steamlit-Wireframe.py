@@ -1,15 +1,25 @@
 """
 ========================================================================
- End-to-End AI QA Portal   (v2)
+ End-to-End AI QA Portal   (v3 – workspace upload + chained jobs)
 ------------------------------------------------------------------------
- - Left  : Upload Source Files   (multi-file to UC Volume)
-           Single button =  Upload + Trigger Summary  (backend chains next jobs)
- - Right : Summary Viewer
- - Below : Quality Assurance  — 4 buttons
-           (Run-All & SCD show INITIAL/DELTA picker)
- - Dino runner game while the job runs
- - Live button colours  : yellow running | green success | red fail
- - Job Execution History table
+ Flow for the "Upload Files & Generate Summary" button:
+   1.  Every selected file is pushed to Workspace via
+       POST /api/2.0/workspace/import      (base-64 content)
+   2.  ONE job is triggered — the File-Copy job
+       (its downstream tasks are chained in the Databricks backend:
+        File-Copy → Summary → whatever you added).
+   3.  Streamlit polls the run, collects the Summary task's JSON output
+       from its notebook_output and paints the right-hand panel.
+
+ Layout
+   • Upload (left)           |   Summary Viewer (right)
+   • Quality Assurance       :   4 buttons
+                                  ‑ Run All Validation   (INITIAL/DELTA)
+                                  ‑ STM Validation
+                                  ‑ SCD Validation       (INITIAL/DELTA)
+                                  ‑ Test Case Generator  (merged, job 2564838)
+   • Dino runner while a job is running
+   • Job Execution History
 ========================================================================
 """
 
@@ -19,18 +29,25 @@ import pandas as pd
 import requests
 import time
 import json
+import base64
 from datetime import datetime
 
 # =========================================================================
-# 1. CONFIG   (move to st.secrets in production)
+# 1. CONFIG   (move to st.secrets in production!)
 # =========================================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
 TOKEN           = "dapi180370eb25ac521baee3f96924db98e9"
 
-VOLUME_PATH     = "/Volumes/edl_qa/qa_agent/qa_validation_input"
+WORKSPACE_UPLOAD_DIR = "/Shared/qa_uploads"   # files land here first
+VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
 
-# Job IDs ------------------------------------------------------------------
-SUMMARY_JOB_ID  = 1095682687953224          # summary job (chains next jobs on backend)
+# Job IDs -----------------------------------------------------------------
+# The File-Copy job should be configured in Databricks with chained tasks:
+#     task_1  = File_Copy_Notebook   (publishes stm_file_names)
+#     task_2  = STM_Summarizer       (depends_on task_1,
+#                                     stm_file_names = {{tasks.task_1.values.stm_file_names}})
+#     task_3… = anything else you want to chain
+FILE_COPY_JOB_ID = 1095682687953224
 
 JOB_IDS = {
     "Run All Validation" : 566631342323223,
@@ -62,7 +79,6 @@ st.markdown(
     <style>
     .block-container { padding-top: 1.3rem; }
 
-    /* button status colours */
     .btn-idle    button { background:#2563EB !important; color:#fff !important; }
     .btn-running button { background:#FACC15 !important; color:#111 !important;
                           animation: pulse 1.1s infinite;}
@@ -81,7 +97,6 @@ st.markdown(
         font-weight: 600;
         font-size: 16px;
     }
-
     .stDataFrame { border-radius: 8px; }
     </style>
     """,
@@ -89,12 +104,12 @@ st.markdown(
 )
 
 # =========================================================================
-# 4. SESSION-STATE
+# 4. SESSION STATE
 # =========================================================================
 def _init_state():
     defaults = {
-        "uploaded_stm_names"  : [],
-        "uploaded_file_paths" : [],
+        "uploaded_stm_names"   : [],   # comma-list goes to jobs
+        "uploaded_file_paths"  : [],   # full workspace/volume paths
         "btn_status" : {
             "upload_summary": "idle",
             "run_all"       : "idle",
@@ -102,9 +117,9 @@ def _init_state():
             "scd_val"       : "idle",
             "tc_gen"        : "idle",
         },
-        "df_summary"          : pd.DataFrame(columns=["Category", "Details"]),
-        "job_history"         : [],
-        "pending_validation"  : None,
+        "df_summary"           : pd.DataFrame(columns=["Category", "Details"]),
+        "job_history"          : [],
+        "pending_validation"   : None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -123,17 +138,24 @@ def _clean_stm_name(filename: str) -> str:
     return filename
 
 
-def upload_to_volume(file_obj) -> tuple[bool, str]:
-    full_path = f"{VOLUME_PATH}/{file_obj.name}"
-    url = f"{DATABRICKS_HOST}/api/2.0/fs/files{full_path}?overwrite=true"
-    hdr = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type" : "application/octet-stream",
+def upload_to_workspace(file_obj) -> tuple[bool, str]:
+    """Base64-encode the file and push it into the Databricks Workspace."""
+    ws_path = f"{WORKSPACE_UPLOAD_DIR}/{file_obj.name}"
+    payload = {
+        "path"     : ws_path,
+        "format"   : "AUTO",
+        "overwrite": True,
+        "content"  : base64.b64encode(file_obj.getvalue()).decode("utf-8"),
     }
     try:
-        r = requests.put(url, headers=hdr, data=file_obj.getvalue(), timeout=120)
+        r = requests.post(
+            f"{DATABRICKS_HOST}/api/2.0/workspace/import",
+            headers=HEADERS,
+            json=payload,
+            timeout=180,
+        )
         if r.status_code in (200, 204):
-            return True, full_path
+            return True, ws_path
         return False, f"{r.status_code} – {r.text[:200]}"
     except Exception as e:
         return False, str(e)
@@ -170,17 +192,15 @@ def get_notebook_output(task_run_id: int) -> dict:
 
 
 def log_history(category: str, job_id: int, run_id, status: str):
-    st.session_state.job_history.append(
-        {
-            "Category": category, "Job ID": job_id,
-            "Run ID": run_id, "Status": status,
-            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
+    st.session_state.job_history.append({
+        "Category": category, "Job ID": job_id,
+        "Run ID"  : run_id,   "Status": status,
+        "Time"    : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
 
 
 # =========================================================================
-# 6. DINO RUNNER GAME  (client-side HTML canvas)
+# 6. DINO GAME  (client-side HTML/Canvas)
 # =========================================================================
 DINO_GAME_HTML = """
 <!doctype html>
@@ -300,10 +320,39 @@ loop();
 
 
 # =========================================================================
-# 7. JOB RUNNER  (poll + dino + colour)
+# 7. HELPERS — chain-aware polling + summary extraction
 # =========================================================================
-def run_job_with_game(job_id: int, params: dict, btn_key: str,
-                     category: str, on_success=None):
+def _extract_summary_from_run(run_id: int):
+    """Scan every task of the run, try to find one whose notebook_output
+       parses into the summary-record shape (list of {Category, Details, ...})."""
+    info  = get_run_details(run_id)
+    tasks = info.get("tasks", [])
+    # check the tasks in reverse order – summary is usually the last one
+    for t in reversed(tasks):
+        try:
+            out = get_notebook_output(t["run_id"])
+            raw = out.get("notebook_output", {}).get("result")
+            if not raw:
+                continue
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                first = parsed[0]
+                if "Category" in first or "STM File" in first:
+                    return parsed
+        except Exception:
+            continue
+    return None
+
+
+def run_job_with_game(
+    job_id: int,
+    params: dict,
+    btn_key: str,
+    category: str,
+    fetch_summary: bool = False,
+):
+    """Trigger a (chained) job, show the dino while polling, paint status
+       colour, and optionally pull the summary out of the chain."""
 
     ok, run_id = trigger_job(job_id, params)
     if not ok:
@@ -321,51 +370,53 @@ def run_job_with_game(job_id: int, params: dict, btn_key: str,
         st.markdown(f"#### 🎮 **{category}** is running — play the Dino while you wait!")
         components.html(DINO_GAME_HTML, height=260, scrolling=False)
 
-    final_state, notebook_result = None, None
     job_url = f"{DATABRICKS_HOST}/#job/{job_id}/run/{run_id}"
+    final_overall = None
 
     while True:
-        info = get_run_details(run_id)
-        try:
-            task = info["tasks"][0]
-            task_run_id = task["run_id"]
-            life_cycle  = task["state"]["life_cycle_state"]
-            result      = task["state"].get("result_state")
-        except Exception:
-            life_cycle  = info.get("state", {}).get("life_cycle_state", "UNKNOWN")
-            result      = info.get("state", {}).get("result_state")
-            task_run_id = run_id
+        info  = get_run_details(run_id)
+        state = info.get("state", {})
+        lc    = state.get("life_cycle_state", "UNKNOWN")
+        rs    = state.get("result_state")
 
-        status_slot.info(f"⏳ **{category}** — `{life_cycle}`  ·  "
-                         f"[open in Databricks]({job_url})")
+        # show per-task progress if it's a chain
+        tasks = info.get("tasks", [])
+        if tasks:
+            tline = " → ".join(
+                f"{t.get('task_key','?')}:{t['state']['life_cycle_state']}"
+                for t in tasks
+            )
+            status_slot.info(f"⏳ **{category}** · {tline}  ·  "
+                             f"[open]({job_url})")
+        else:
+            status_slot.info(f"⏳ **{category}** · `{lc}`  ·  [open]({job_url})")
 
-        if life_cycle in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
-            final_state = result or life_cycle
-            if result == "SUCCESS":
-                try:
-                    out = get_notebook_output(task_run_id)
-                    notebook_result = out.get("notebook_output", {}).get("result")
-                except Exception:
-                    notebook_result = None
+        if lc in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
+            final_overall = rs or lc
             break
-
         time.sleep(6)
 
     game_slot.empty()
     status_slot.empty()
 
-    if final_state == "SUCCESS":
+    if final_overall == "SUCCESS":
         st.session_state.btn_status[btn_key] = "success"
         st.success(f"✅ **{category}** completed successfully "
                    f"(run {run_id}) — [open in Databricks]({job_url})")
-        if on_success:
-            on_success(notebook_result)
+
+        if fetch_summary:
+            data = _extract_summary_from_run(run_id)
+            if data:
+                st.session_state.df_summary = pd.DataFrame(data)
+                st.success(f"📊 Summary loaded — {len(data)} row(s).")
+            else:
+                st.warning("Chain finished but no summary JSON found in task outputs.")
     else:
         st.session_state.btn_status[btn_key] = "failed"
-        st.error(f"❌ **{category}** ended with `{final_state}` — "
+        st.error(f"❌ **{category}** ended with `{final_overall}` — "
                  f"[open in Databricks]({job_url})")
 
-    log_history(category, job_id, run_id, final_state)
+    log_history(category, job_id, run_id, final_overall)
 
 
 # =========================================================================
@@ -391,11 +442,11 @@ st.title("🤖 End-to-End AI QA for Ingestion Pipelines")
 
 
 # =========================================================================
-# 10. TOP ROW — Upload (left)  +  Summary Viewer (right)
+# 10. UPLOAD (left)  +  SUMMARY VIEWER (right)
 # =========================================================================
 left, right = st.columns([3.2, 2], gap="medium")
 
-# ------------------------------------------- LEFT : UPLOAD
+# --------------------------------------------- LEFT : UPLOAD
 with left:
     with st.container(border=True):
         st.subheader("📂 Upload Source Files")
@@ -418,14 +469,13 @@ with left:
         if not uploaded:
             st.caption("🔒 Select file(s) above to enable the button.")
 
-        # list of already-uploaded files
         if st.session_state.uploaded_stm_names:
             with st.expander(f"📑 {len(st.session_state.uploaded_stm_names)} "
                              f"file(s) currently available", expanded=False):
                 st.dataframe(
                     pd.DataFrame({
                         "STM Name (auto)" : st.session_state.uploaded_stm_names,
-                        "Volume Path"     : st.session_state.uploaded_file_paths,
+                        "Workspace Path"  : st.session_state.uploaded_file_paths,
                     }),
                     use_container_width=True,
                     hide_index=True,
@@ -436,7 +486,7 @@ with left:
                     st.rerun()
 
 
-# ------------------------------------------- RIGHT : SUMMARY VIEWER
+# --------------------------------------------- RIGHT : SUMMARY
 with right:
     with st.container(border=True):
         st.subheader("📊 Summary Viewer")
@@ -466,31 +516,22 @@ with right:
 
 
 # =========================================================================
-# 11. UPLOAD + SUMMARY  (single combined action)
+# 11. UPLOAD + SUMMARY HANDLER
+#     - push every file to /Shared/qa_uploads via workspace/import
+#     - fire FILE_COPY_JOB (its backend chain runs the summary next)
+#     - scan the chained tasks for the summary JSON
 # =========================================================================
-def _summary_success_handler(notebook_result):
-    if not notebook_result:
-        st.warning("Summary job finished but returned no result.")
-        return
-    try:
-        records = json.loads(notebook_result)
-        st.session_state.df_summary = pd.DataFrame(records)
-        st.success(f"📊 Summary loaded — {len(records)} row(s).")
-    except Exception as e:
-        st.error(f"Could not parse notebook_output: {e}")
-        st.code(str(notebook_result)[:500])
-
-
 if upload_summary_clicked and uploaded:
-    # --- 1. upload every file to the volume -----------------------
-    prog = st.progress(0.0, text="Uploading…")
-    good_names, good_paths, errors = [], [], []
+
+    # ------ 1. Upload every file to the workspace ------
+    prog = st.progress(0.0, text="Uploading to workspace…")
+    good_names, good_ws_paths, errors = [], [], []
 
     for i, f in enumerate(uploaded, start=1):
-        ok, detail = upload_to_volume(f)
+        ok, detail = upload_to_workspace(f)
         if ok:
             good_names.append(_clean_stm_name(f.name))
-            good_paths.append(detail)
+            good_ws_paths.append(detail)
         else:
             errors.append(f"{f.name} → {detail}")
         prog.progress(i / len(uploaded),
@@ -502,27 +543,29 @@ if upload_summary_clicked and uploaded:
             for e in errors:
                 st.code(e)
 
-    if not good_names:
+    if not good_ws_paths:
         st.session_state.btn_status["upload_summary"] = "failed"
-        st.error("No files uploaded — cannot start Summary.")
+        st.error("No files uploaded — cannot start File-Copy job.")
     else:
-        # merge with anything previously uploaded
+        # merge history
         st.session_state.uploaded_stm_names = sorted(set(
             st.session_state.uploaded_stm_names + good_names))
         st.session_state.uploaded_file_paths = sorted(set(
-            st.session_state.uploaded_file_paths + good_paths))
+            st.session_state.uploaded_file_paths + good_ws_paths))
 
-        st.success(f"✅ Uploaded {len(good_names)} file(s) to volume. "
-                   "Triggering Summary job…")
+        st.success(f"✅ {len(good_ws_paths)} file(s) in workspace. "
+                   "Triggering File-Copy job (backend chains Summary)…")
 
-        # --- 2. trigger summary job (backend will chain next jobs) -
-        stm_csv = ",".join(st.session_state.uploaded_stm_names)
+        # ------ 2. Fire the chained job ------
+        params = {
+            "workspace_file_paths": ",".join(good_ws_paths),
+        }
         run_job_with_game(
-            SUMMARY_JOB_ID,
-            {"stm_file_names": stm_csv},
+            FILE_COPY_JOB_ID,
+            params,
             "upload_summary",
-            "Upload + Summary",
-            on_success=_summary_success_handler,
+            "File Copy + Summary",
+            fetch_summary=True,
         )
         st.rerun()
 
@@ -537,7 +580,6 @@ with st.container(border=True):
     if not has_files:
         st.info("Upload files first to enable the validation buttons.")
 
-    # Row-1 : Run All Validation
     run_all_clicked = styled_button(
         "▶  Run All Validation",
         key="run_all_btn",
@@ -545,7 +587,6 @@ with st.container(border=True):
         disabled=not has_files,
     )
 
-    # Row-2 : STM / SCD / TC-Gen
     b1, b2, b3 = st.columns(3)
     with b1:
         stm_clicked = styled_button(
@@ -569,7 +610,7 @@ with st.container(border=True):
             disabled=not has_files,
         )
 
-    # -- INITIAL / DELTA pop-up -----------------------------------
+    # ---- INITIAL / DELTA dialog ------------------------------------
     if run_all_clicked:
         st.session_state.pending_validation = "run_all"
     if scd_clicked:
@@ -615,7 +656,7 @@ with st.container(border=True):
                     )
                 st.rerun()
 
-    # -- direct buttons -------------------------------------------
+    # ---- direct buttons --------------------------------------------
     if stm_clicked:
         params = {"STM_FILE_NAMES": ",".join(st.session_state.uploaded_stm_names)}
         run_job_with_game(JOB_IDS["STM Validation"], params,
@@ -639,15 +680,16 @@ if st.session_state.job_history:
     hist = pd.DataFrame(st.session_state.job_history)
 
     def _row_style(row):
-        col = ""
-        if row["Status"] == "SUCCESS":
-            col = "background-color:#dcfce7;color:#065f46;"
-        elif row["Status"] in ("FAILED", "INTERNAL_ERROR") \
-                or str(row["Status"]).startswith("TRIGGER_FAIL"):
-            col = "background-color:#fee2e2;color:#7f1d1d;"
-        elif row["Status"] in ("CANCELED", "SKIPPED"):
-            col = "background-color:#fef9c3;color:#713f12;"
-        return [col] * len(row)
+        s = str(row["Status"])
+        if s == "SUCCESS":
+            c = "background-color:#dcfce7;color:#065f46;"
+        elif s in ("FAILED", "INTERNAL_ERROR") or s.startswith("TRIGGER_FAIL"):
+            c = "background-color:#fee2e2;color:#7f1d1d;"
+        elif s in ("CANCELED", "SKIPPED"):
+            c = "background-color:#fef9c3;color:#713f12;"
+        else:
+            c = ""
+        return [c] * len(row)
 
     st.dataframe(
         hist.style.apply(_row_style, axis=1),
