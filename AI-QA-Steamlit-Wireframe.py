@@ -54,7 +54,6 @@ HEADERS = {
 st.set_page_config(
     page_title="End-to-End AI QA",
     layout="wide",
-    page_icon="🧪",
 )
 
 # =========================================================================
