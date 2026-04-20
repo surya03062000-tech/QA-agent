@@ -1,21 +1,17 @@
 """
 ========================================================================
- End-to-End AI QA Portal   (v4 — clean & tidy)
+ End-to-End AI QA Portal   (Community-Edition Compatible)
 ------------------------------------------------------------------------
- ▸ Upload panel (left) and Summary Viewer (right) — same fixed height,
-   summary viewer is scrollable so the gap to "Quality Assurance"
-   stays small
- ▸ "Upload Files & Generate Summary" fires TWO jobs sequentially:
-        1) File-Copy job          (/Workspace → UC Volume)
-        2) Summary (STM-Summarizer) job
-     Summary output is parsed and painted into the right panel.
- ▸ Button colour tracks job state automatically:
-        idle    = blue
-        running = yellow (pulses)
-        success = green
-        failed  = red
- ▸ Dino runner renders only while a job is running.
- ▸ Job Execution History table at the bottom.
+ ▸ Works on Databricks Community Edition:
+     - Uploads to DBFS /FileStore (no Unity Catalog volumes needed)
+     - Uses DBFS streaming API (handles files bigger than 1 MB)
+     - Only one job is triggered: the Summarizer
+ ▸ Clean layout: upload (left) · summary viewer (right)
+ ▸ Four QA buttons (INITIAL/DELTA for Run-All & SCD)
+ ▸ Dino runner while a job is running
+ ▸ Button colour automatically tracks status:
+      idle = blue · running = yellow · success = green · fail = red
+ ▸ Job execution history
 ========================================================================
 """
 
@@ -29,23 +25,24 @@ import base64
 from datetime import datetime
 
 # =========================================================================
-# 1. CONFIG   (move to st.secrets in production!)
+# 1. CONFIG   (put in st.secrets for production)
 # =========================================================================
-DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
-TOKEN           = "dapi180370eb25ac521baee3f96924db98e9"
+# Community Edition URL pattern:
+#   https://community.cloud.databricks.com
+DATABRICKS_HOST = "https://community.cloud.databricks.com"
+TOKEN           = "PUT_YOUR_CE_TOKEN_HERE"
 
-WORKSPACE_UPLOAD_DIR = "/Shared/qa_uploads"
-VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
+# CE uses DBFS (/FileStore) instead of Unity-Catalog volumes
+DBFS_UPLOAD_DIR = "/FileStore/qa_uploads"
 
-# Job IDs -----------------------------------------------------------------
-FILE_COPY_JOB_ID = 1095682687953224        # copies workspace → volume
-SUMMARY_JOB_ID   = 1095682687953224         # STM summarizer
+# Job IDs (create these jobs in CE first) ---------------------------------
+SUMMARY_JOB_ID = 0         # <<< put your Summary job id here
 
 JOB_IDS = {
-    "Run All Validation" : 566631342323223,
-    "STM Validation"     : 190540510295693,
-    "SCD Validation"     : 909635921592434,
-    "Test Case Generator": 160480032307967,
+    "Run All Validation" : 0,
+    "STM Validation"     : 0,
+    "SCD Validation"     : 0,
+    "Test Case Generator": 2564838,
 }
 
 HEADERS = {
@@ -64,15 +61,13 @@ st.set_page_config(
 )
 
 # =========================================================================
-# 3. GLOBAL CSS  (tight, modern look)
+# 3. GLOBAL CSS
 # =========================================================================
 st.markdown("""
 <style>
-/* tighter page padding & element gaps */
 .block-container { padding-top: 1.1rem; padding-bottom: 2rem; }
 div[data-testid="stVerticalBlock"] > div { gap: 0.6rem; }
 
-/* ---- button status colours ---------------------------------------- */
 .btn-idle    button { background:#2563EB !important; color:#fff !important; }
 .btn-running button { background:#FACC15 !important; color:#111 !important;
                        animation: pulse 1.1s infinite;}
@@ -85,7 +80,6 @@ div[data-testid="stVerticalBlock"] > div { gap: 0.6rem; }
     100% { box-shadow: 0 0 0 0   rgba(250,204, 21,0); }
 }
 
-/* buttons polished */
 .stButton > button {
     height: 52px;
     border-radius: 10px;
@@ -94,27 +88,15 @@ div[data-testid="stVerticalBlock"] > div { gap: 0.6rem; }
     transition: transform .1s ease;
     border: none !important;
 }
-.stButton > button:hover   { transform: translateY(-1px); }
-.stButton > button:active  { transform: translateY(0); }
+.stButton > button:hover  { transform: translateY(-1px); }
+.stButton > button:active { transform: translateY(0); }
 
-/* bordered containers */
 [data-testid="stVerticalBlockBorderWrapper"] {
     border-radius: 14px !important;
     box-shadow: 0 1px 2px rgba(0,0,0,.04);
 }
-
-/* dataframe polish */
-.stDataFrame, .stDataFrame [data-testid="stElementToolbar"] {
-    border-radius: 10px;
-}
-
-/* subheader compactness */
-.stSubheader { margin-bottom: 0.4rem !important; }
-
-/* make the title nicer */
+.stDataFrame { border-radius: 10px; }
 h1 { margin-bottom: 0.4rem !important; }
-
-/* remove the big divider gap */
 hr { margin: 1rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -126,17 +108,17 @@ def _init_state():
     defaults = {
         "uploaded_stm_names"  : [],
         "uploaded_file_paths" : [],
-        "btn_status" : {
+        "btn_status": {
             "upload_summary": "idle",
             "run_all"       : "idle",
             "stm_val"       : "idle",
             "scd_val"       : "idle",
             "tc_gen"        : "idle",
         },
-        "df_summary"          : pd.DataFrame(columns=["Category", "Details"]),
-        "job_history"         : [],
-        "pending_validation"  : None,
-        "pending_action"      : None,   # pending backend flow to run on next rerun
+        "df_summary"         : pd.DataFrame(columns=["Category", "Details"]),
+        "job_history"        : [],
+        "pending_validation" : None,
+        "pending_action"     : None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -145,7 +127,62 @@ _init_state()
 
 
 # =========================================================================
-# 5. UTILITIES
+# 5. DBFS UPLOAD  (streaming — works for any size)
+# =========================================================================
+def dbfs_upload_streaming(file_bytes: bytes, dbfs_path: str) -> tuple[bool, str]:
+    """Upload any-size file to DBFS using create / add-block / close.
+       Works on Databricks Community Edition."""
+    try:
+        # Step 1 — open a handle (overwrite = True)
+        r1 = requests.post(
+            f"{DATABRICKS_HOST}/api/2.0/dbfs/create",
+            headers=HEADERS,
+            json={"path": dbfs_path, "overwrite": True},
+            timeout=60,
+        )
+        if r1.status_code != 200:
+            return False, f"create failed: {r1.status_code} {r1.text[:160]}"
+
+        handle = r1.json().get("handle")
+        if handle is None:
+            return False, f"no handle returned: {r1.text[:160]}"
+
+        # Step 2 — stream bytes in base-64 chunks (< 1 MB each)
+        CHUNK = 900_000        # bytes before base64 encoding
+        for i in range(0, len(file_bytes), CHUNK):
+            piece = file_bytes[i : i + CHUNK]
+            b64   = base64.b64encode(piece).decode("utf-8")
+            rb = requests.post(
+                f"{DATABRICKS_HOST}/api/2.0/dbfs/add-block",
+                headers=HEADERS,
+                json={"handle": handle, "data": b64},
+                timeout=120,
+            )
+            if rb.status_code != 200:
+                # try to close the handle cleanly
+                requests.post(
+                    f"{DATABRICKS_HOST}/api/2.0/dbfs/close",
+                    headers=HEADERS, json={"handle": handle}, timeout=30,
+                )
+                return False, f"add-block failed: {rb.status_code} {rb.text[:160]}"
+
+        # Step 3 — close
+        rc = requests.post(
+            f"{DATABRICKS_HOST}/api/2.0/dbfs/close",
+            headers=HEADERS,
+            json={"handle": handle},
+            timeout=30,
+        )
+        if rc.status_code != 200:
+            return False, f"close failed: {rc.status_code} {rc.text[:160]}"
+
+        return True, dbfs_path
+    except Exception as e:
+        return False, str(e)
+
+
+# =========================================================================
+# 6. UTILITIES
 # =========================================================================
 def _clean_stm_name(filename: str) -> str:
     for ext in (".xlsx", ".xls", ".xlsm", ".csv", ".parquet",
@@ -155,35 +192,18 @@ def _clean_stm_name(filename: str) -> str:
     return filename
 
 
-def upload_to_workspace(name: str, data_bytes: bytes) -> tuple[bool, str]:
-    ws_path = f"{WORKSPACE_UPLOAD_DIR}/{name}"
-    payload = {
-        "path"     : ws_path,
-        "format"   : "AUTO",
-        "overwrite": True,
-        "content"  : base64.b64encode(data_bytes).decode("utf-8"),
-    }
-    try:
-        r = requests.post(
-            f"{DATABRICKS_HOST}/api/2.0/workspace/import",
-            headers=HEADERS, json=payload, timeout=180,
-        )
-        if r.status_code in (200, 204):
-            return True, ws_path
-        return False, f"{r.status_code} – {r.text[:180]}"
-    except Exception as e:
-        return False, str(e)
-
-
 def trigger_job(job_id: int, params: dict) -> tuple[bool, str | int]:
+    if not job_id:
+        return False, "Job id not configured (still 0)."
     payload = {"job_id": job_id, "notebook_params": params}
     try:
+        # CE supports both Jobs API v2.1 and v2.2 — stick to 2.1 for safety
         r = requests.post(
-            f"{DATABRICKS_HOST}/api/2.2/jobs/run-now",
+            f"{DATABRICKS_HOST}/api/2.1/jobs/run-now",
             headers=HEADERS, json=payload, timeout=30,
         )
         if r.status_code != 200:
-            return False, f"{r.status_code} – {r.text[:180]}"
+            return False, f"{r.status_code} – {r.text[:200]}"
         return True, r.json().get("run_id")
     except Exception as e:
         return False, str(e)
@@ -191,28 +211,25 @@ def trigger_job(job_id: int, params: dict) -> tuple[bool, str | int]:
 
 def get_run_details(run_id: int) -> dict:
     return requests.get(
-        f"{DATABRICKS_HOST}/api/2.2/jobs/runs/get",
+        f"{DATABRICKS_HOST}/api/2.1/jobs/runs/get",
         headers=HEADERS, params={"run_id": run_id}, timeout=30,
     ).json()
 
 
 def get_notebook_output(task_run_id: int) -> dict:
     return requests.get(
-        f"{DATABRICKS_HOST}/api/2.2/jobs/runs/get-output",
+        f"{DATABRICKS_HOST}/api/2.1/jobs/runs/get-output",
         headers=HEADERS, params={"run_id": task_run_id}, timeout=30,
     ).json()
 
 
 def poll_until_done(run_id: int, status_slot=None, label: str = "") -> tuple[str, int]:
-    """Poll a run until it reaches a terminal state.
-       Returns (result_state_or_lifecycle, task_run_id_of_last_task)."""
     while True:
         info  = get_run_details(run_id)
         state = info.get("state", {})
         lc    = state.get("life_cycle_state", "UNKNOWN")
         rs    = state.get("result_state")
 
-        # track latest task
         tasks = info.get("tasks", [])
         last_task_run_id = tasks[-1]["run_id"] if tasks else run_id
 
@@ -225,9 +242,9 @@ def poll_until_done(run_id: int, status_slot=None, label: str = "") -> tuple[str
 
 
 def extract_summary_list(run_id: int):
-    """Look through every task of a run and return the first notebook_output
-       that parses into a non-empty list of dicts."""
-    info = get_run_details(run_id)
+    """Find the first task whose notebook_output parses into the expected
+       list-of-dicts format."""
+    info  = get_run_details(run_id)
     tasks = info.get("tasks", []) or [{"run_id": run_id}]
     for t in reversed(tasks):
         try:
@@ -252,7 +269,7 @@ def log_history(category: str, job_id: int, run_id, status: str):
 
 
 # =========================================================================
-# 6. DINO GAME  (client-side HTML canvas)
+# 7. DINO RUNNER GAME
 # =========================================================================
 DINO_GAME_HTML = """
 <!doctype html>
@@ -271,7 +288,7 @@ DINO_GAME_HTML = """
   <div class="score">🦖 Dino Runner — Score : <span id="score">0</span>
        &nbsp;|&nbsp; High : <span id="high">0</span></div>
   <canvas id="game" width="720" height="170"></canvas>
-  <div class="hint">Press <b>SPACE</b>/tap to jump · <b>↓</b> to duck · playing keeps you company while the job runs</div>
+  <div class="hint">Press <b>SPACE</b>/tap to jump · <b>↓</b> to duck</div>
 </div>
 <script>
 const cvs = document.getElementById('game');
@@ -371,7 +388,7 @@ loop();
 
 
 # =========================================================================
-# 7. STYLED BUTTON
+# 8. STYLED BUTTON
 # =========================================================================
 def styled_button(label: str, key: str, status_key: str, disabled=False):
     cls = {
@@ -387,19 +404,18 @@ def styled_button(label: str, key: str, status_key: str, disabled=False):
 
 
 # =========================================================================
-# 8. HEADER
+# 9. HEADER
 # =========================================================================
 st.title("🤖 End-to-End AI QA for Ingestion Pipelines")
 
 
 # =========================================================================
-# 9. UPLOAD (LEFT)  +  SUMMARY VIEWER (RIGHT)
+# 10. UPLOAD (LEFT) + SUMMARY VIEWER (RIGHT)
 # =========================================================================
-PANEL_HEIGHT = 380   # keep both panels same height → tiny gap below
+PANEL_HEIGHT = 380
 
 left, right = st.columns([3.2, 2], gap="medium")
 
-# ----------------------------- LEFT : UPLOAD
 with left:
     with st.container(border=True, height=PANEL_HEIGHT):
         st.subheader("📂 Upload Source Files")
@@ -425,8 +441,8 @@ with left:
                              f"STM file(s) available", expanded=False):
                 st.dataframe(
                     pd.DataFrame({
-                        "STM Name"       : st.session_state.uploaded_stm_names,
-                        "Workspace Path" : st.session_state.uploaded_file_paths,
+                        "STM Name"  : st.session_state.uploaded_stm_names,
+                        "DBFS Path" : st.session_state.uploaded_file_paths,
                     }),
                     use_container_width=True,
                     hide_index=True,
@@ -436,12 +452,9 @@ with left:
                     st.session_state.uploaded_file_paths = []
                     st.rerun()
 
-
-# ----------------------------- RIGHT : SUMMARY VIEWER (scrollable, same height)
 with right:
     with st.container(border=True, height=PANEL_HEIGHT):
         st.subheader("📊 Summary Viewer")
-
         if st.session_state.df_summary.empty:
             st.caption("Upload file(s) and click **Generate Summary** to populate this panel.")
         else:
@@ -453,49 +466,41 @@ with right:
 
 
 # =========================================================================
-# 10. QUALITY ASSURANCE  (4 buttons)
+# 11. QUALITY ASSURANCE
 # =========================================================================
 with st.container(border=True):
     st.subheader("🧪 Quality Assurance")
 
-    has_files     = bool(st.session_state.uploaded_stm_names)
-    busy          = st.session_state.pending_action is not None
-    common_disable = (not has_files) or busy
+    has_files = bool(st.session_state.uploaded_stm_names)
+    busy      = st.session_state.pending_action is not None
+    dis       = (not has_files) or busy
 
     if not has_files:
         st.info("Upload files first to enable the validation buttons.")
 
     run_all_clicked = styled_button(
         "▶  Run All Validation",
-        key="run_all_btn", status_key="run_all",
-        disabled=common_disable,
+        key="run_all_btn", status_key="run_all", disabled=dis,
     )
-
     b1, b2, b3 = st.columns(3)
     with b1:
         stm_clicked = styled_button(
             "🔍 STM Validation",
-            key="stm_val_btn", status_key="stm_val",
-            disabled=common_disable,
+            key="stm_val_btn", status_key="stm_val", disabled=dis,
         )
     with b2:
         scd_clicked = styled_button(
             "🔁 SCD Validation",
-            key="scd_val_btn", status_key="scd_val",
-            disabled=common_disable,
+            key="scd_val_btn", status_key="scd_val", disabled=dis,
         )
     with b3:
         tc_clicked = styled_button(
             "🧬 Test Case Generator",
-            key="tc_gen_btn", status_key="tc_gen",
-            disabled=common_disable,
+            key="tc_gen_btn", status_key="tc_gen", disabled=dis,
         )
 
-    # ---- INITIAL / DELTA picker ------------------------------------
-    if run_all_clicked:
-        st.session_state.pending_validation = "run_all"
-    if scd_clicked:
-        st.session_state.pending_validation = "scd_val"
+    if run_all_clicked: st.session_state.pending_validation = "run_all"
+    if scd_clicked:     st.session_state.pending_validation = "scd_val"
 
     if st.session_state.pending_validation in ("run_all", "scd_val") and not busy:
         with st.container(border=True):
@@ -515,7 +520,6 @@ with st.container(border=True):
             if cancel:
                 st.session_state.pending_validation = None
                 st.rerun()
-
             if confirm:
                 which = st.session_state.pending_validation
                 st.session_state.pending_validation = None
@@ -541,7 +545,6 @@ with st.container(border=True):
                     }
                 st.rerun()
 
-    # ---- direct buttons --------------------------------------------
     if stm_clicked and has_files and not busy:
         st.session_state.btn_status["stm_val"] = "running"
         st.session_state.pending_action = {
@@ -566,29 +569,24 @@ with st.container(border=True):
 
 
 # =========================================================================
-# 11. UPLOAD+SUMMARY click  →  enqueue pending action
+# 12. UPLOAD + SUMMARY CLICK  →  schedule pending action
 # =========================================================================
 if (upload_summary_clicked
         and uploaded
         and st.session_state.pending_action is None):
 
-    # snapshot the uploaded files as bytes so they survive the rerun
-    files_snapshot = [
-        {"name": f.name, "data": f.getvalue()} for f in uploaded
-    ]
+    files_snapshot = [{"name": f.name, "data": f.getvalue()} for f in uploaded]
     st.session_state.btn_status["upload_summary"] = "running"
     st.session_state.pending_action = {
-        "kind"    : "upload_summary",
-        "btn_key" : "upload_summary",
-        "files"   : files_snapshot,
+        "kind"   : "upload_summary",
+        "btn_key": "upload_summary",
+        "files"  : files_snapshot,
     }
     st.rerun()
 
 
 # =========================================================================
-# 12. PENDING-ACTION EXECUTOR
-#     Runs on the rerun AFTER the button was clicked.  By now the button
-#     is already painted YELLOW because btn_status = "running".
+# 13. EXECUTE PENDING ACTION (upload → summary job)
 # =========================================================================
 if st.session_state.pending_action is not None:
 
@@ -596,83 +594,62 @@ if st.session_state.pending_action is not None:
     btn_key   = action["btn_key"]
     dino_slot = st.empty()
 
-    # -- dino + status placeholder --------------------------------
     with dino_slot.container():
         components.html(DINO_GAME_HTML, height=230, scrolling=False)
         status_slot = st.empty()
 
     try:
         if action["kind"] == "upload_summary":
-            files = action["files"]
-            category_label = "File Copy + Summary"
-
-            # --- 1. upload each file to the workspace --------------
-            status_slot.info("📤 Uploading files to workspace…")
-            ws_paths, stm_names, errs = [], [], []
-            for f in files:
-                ok, detail = upload_to_workspace(f["name"], f["data"])
+            # --- 1. upload each file straight to DBFS FileStore -----
+            status_slot.info("📤 Uploading files to DBFS…")
+            ok_paths, stm_names, errs = [], [], []
+            for f in action["files"]:
+                dbfs_path = f"{DBFS_UPLOAD_DIR}/{f['name']}"
+                ok, detail = dbfs_upload_streaming(f["data"], dbfs_path)
                 if ok:
-                    ws_paths.append(detail)
+                    ok_paths.append(detail)
                     stm_names.append(_clean_stm_name(f["name"]))
                 else:
                     errs.append(f"{f['name']} → {detail}")
 
-            if not ws_paths:
-                raise Exception(f"Upload failed: {errs}")
+            if not ok_paths:
+                raise Exception(f"Upload failed. {errs}")
 
-            # --- 2. File-Copy job -----------------------------------
-            ok, copy_run = trigger_job(
-                FILE_COPY_JOB_ID,
-                {"workspace_file_paths": ",".join(ws_paths)},
-            )
-            if not ok:
-                raise Exception(f"File-Copy trigger failed: {copy_run}")
-
-            copy_state, _ = poll_until_done(copy_run, status_slot, "File-Copy")
-            log_history("File Copy", FILE_COPY_JOB_ID, copy_run, copy_state)
-            if copy_state != "SUCCESS":
-                raise Exception(f"File-Copy ended with {copy_state}")
-
-            # remember uploaded files in session
+            # remember what was uploaded
             st.session_state.uploaded_stm_names = sorted(set(
                 st.session_state.uploaded_stm_names + stm_names))
             st.session_state.uploaded_file_paths = sorted(set(
-                st.session_state.uploaded_file_paths + ws_paths))
+                st.session_state.uploaded_file_paths + ok_paths))
 
-            # --- 3. Summary job -------------------------------------
-            ok, sum_run = trigger_job(
+            # --- 2. trigger summary job ---------------------------------
+            ok, run_id = trigger_job(
                 SUMMARY_JOB_ID,
                 {"stm_file_names": ",".join(stm_names)},
             )
             if not ok:
-                raise Exception(f"Summary trigger failed: {sum_run}")
+                raise Exception(f"Summary trigger failed: {run_id}")
 
-            sum_state, _ = poll_until_done(sum_run, status_slot, "Summary")
-            log_history("Summary", SUMMARY_JOB_ID, sum_run, sum_state)
-            if sum_state != "SUCCESS":
-                raise Exception(f"Summary ended with {sum_state}")
+            state, _ = poll_until_done(run_id, status_slot, "Summary")
+            log_history("Summary", SUMMARY_JOB_ID, run_id, state)
+            if state != "SUCCESS":
+                raise Exception(f"Summary ended with {state}")
 
-            # --- 4. Pull summary JSON -------------------------------
-            data = extract_summary_list(sum_run)
+            # --- 3. pull result JSON ------------------------------------
+            data = extract_summary_list(run_id)
             if data:
                 st.session_state.df_summary = pd.DataFrame(data)
 
             st.session_state.btn_status[btn_key] = "success"
 
         elif action["kind"] == "validation":
-            category = action["category"]
-            job_id   = action["job_id"]
-            params   = action["params"]
-
+            category, job_id, params = action["category"], action["job_id"], action["params"]
             ok, run_id = trigger_job(job_id, params)
             if not ok:
                 raise Exception(f"Trigger failed: {run_id}")
-
             state, _ = poll_until_done(run_id, status_slot, category)
             log_history(category, job_id, run_id, state)
             if state != "SUCCESS":
                 raise Exception(f"{category} ended with {state}")
-
             st.session_state.btn_status[btn_key] = "success"
 
     except Exception as e:
@@ -686,7 +663,7 @@ if st.session_state.pending_action is not None:
 
 
 # =========================================================================
-# 13. JOB EXECUTION HISTORY
+# 14. JOB EXECUTION HISTORY
 # =========================================================================
 st.divider()
 st.subheader("📜 Job Execution History")
@@ -709,7 +686,6 @@ if st.session_state.job_history:
         use_container_width=True,
         hide_index=True,
     )
-
     if st.button("🧹 Clear history", key="clear_history"):
         st.session_state.job_history = []
         st.rerun()
@@ -718,9 +694,9 @@ else:
 
 
 # =========================================================================
-# 14. FOOTER
+# 15. FOOTER
 # =========================================================================
 st.markdown("""
 ---
-<center><sub>Built with ❤️ on Streamlit + Databricks Jobs API</sub></center>
+<center><sub>Community Edition · DBFS FileStore · Streamlit + Databricks Jobs API</sub></center>
 """, unsafe_allow_html=True)
