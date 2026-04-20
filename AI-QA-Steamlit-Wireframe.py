@@ -489,7 +489,7 @@ left, right = st.columns([1, 1], gap="medium")
 # ------------------------ LEFT : UPLOAD + SUMMARY GENERATOR ----------------
 with left:
     with st.container(border=True, height=PANEL_HEIGHT):
-        st.subheader("📤 Upload Files")
+        st.subheader("Upload Files")
 
         uploaded = st.file_uploader(
             "STM file(s) (.xlsx)",
