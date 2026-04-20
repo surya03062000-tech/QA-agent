@@ -521,7 +521,7 @@ with left:
             else:
                 st.caption("No files yet.")
 
-# ------------------------ RIGHT : SUMMARY VIEWER (scrollable, filtered) ----
+# ------------------------ RIGHT : SUMMARY VIEWER (grouped by STM + sheet) ----
 with right:
     with st.container(border=True, height=PANEL_HEIGHT):
         st.subheader("📊 Summary Viewer")
@@ -529,11 +529,67 @@ with right:
         if st.session_state.df_summary.empty:
             st.caption("Upload file(s) and click **Generate Summary** to populate this panel.")
         else:
-            st.dataframe(
-                st.session_state.df_summary,
-                use_container_width=True,
-                hide_index=True,
-            )
+            df_sv = st.session_state.df_summary
+
+            # ----- identify the grouping columns (STM file + sheet) -------
+            def _find_col(df, *candidates):
+                """Return the first df column whose normalised name matches
+                any of the candidate names (case/underscore/space-insensitive)."""
+                wanted = {c.lower().replace("_", " ").strip() for c in candidates}
+                for col in df.columns:
+                    if col.lower().replace("_", " ").strip() in wanted:
+                        return col
+                return None
+
+            stm_col   = _find_col(df_sv, "STM File", "STM", "STM Name",
+                                  "STM File Name", "File")
+            sheet_col = _find_col(df_sv, "Sheet", "Sheet Name")
+
+            # Columns to show in each per-sheet table — everything except
+            # the two grouping columns.
+            display_cols = [c for c in df_sv.columns
+                            if c not in (stm_col, sheet_col)]
+
+            # ----- fallback: if we can't find sheet/stm cols, show flat -----
+            if not sheet_col and not stm_col:
+                st.dataframe(df_sv, use_container_width=True, hide_index=True)
+            else:
+                # Group preserving original row order
+                group_keys = []
+                groups = {}
+                for _, row in df_sv.iterrows():
+                    stm_val   = str(row[stm_col]).strip()   if stm_col   else ""
+                    sheet_val = str(row[sheet_col]).strip() if sheet_col else ""
+                    key = (stm_val, sheet_val)
+                    if key not in groups:
+                        groups[key] = []
+                        group_keys.append(key)
+                    groups[key].append(row)
+
+                # Render each group as: title bar + table of content columns
+                for i, (stm_val, sheet_val) in enumerate(group_keys):
+                    if stm_val and sheet_val:
+                        title = f"📄 **{stm_val}**  ·  Sheet: **{sheet_val}**"
+                    elif sheet_val:
+                        title = f"📄 Sheet: **{sheet_val}**"
+                    else:
+                        title = f"📄 **{stm_val or 'Summary'}**"
+
+                    st.markdown(
+                        f"<div style='background:#1F4E79;color:#fff;"
+                        f"padding:8px 14px;border-radius:6px 6px 0 0;"
+                        f"font:600 13px -apple-system,Segoe UI,Roboto,Arial;"
+                        f"margin-top:{'14px' if i > 0 else '0'};'>"
+                        f"{title}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    sub_df = pd.DataFrame(groups[(stm_val, sheet_val)])[display_cols]
+                    st.dataframe(
+                        sub_df,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
 
 # =========================================================================
