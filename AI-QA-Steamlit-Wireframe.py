@@ -480,7 +480,7 @@ def styled_button(label, key, status_key, disabled=False, use_container_width=Tr
 # =========================================================================
 # 9. TOP-OF-PAGE LAYOUT
 # =========================================================================
-st.title("🧪 End-to-End AI Quality-Assurance Portal")
+st.title("End-to-End AI Quality-Assurance Portal")
 st.caption("Upload STM file(s) → generate summary → run validations.")
 
 PANEL_HEIGHT = 420
@@ -523,7 +523,7 @@ with left:
 # ------------------------ RIGHT : SUMMARY VIEWER (grouped by STM + sheet) ----
 with right:
     with st.container(border=True, height=PANEL_HEIGHT):
-        st.subheader("📊 Summary Viewer")
+        st.subheader("Summary Viewer")
 
         if st.session_state.df_summary.empty:
             st.caption("Upload file(s) and click **Generate Summary** to populate this panel.")
@@ -568,11 +568,11 @@ with right:
                 # Render each group as: title bar + table of content columns
                 for i, (stm_val, sheet_val) in enumerate(group_keys):
                     if stm_val and sheet_val:
-                        title = f"📄 **{stm_val}**  ·  Sheet: **{sheet_val}**"
+                        title = f"📄 {stm_val}  ·  Sheet: {sheet_val}"
                     elif sheet_val:
-                        title = f"📄 Sheet: **{sheet_val}**"
+                        title = f"📄 Sheet: {sheet_val}"
                     else:
-                        title = f"📄 **{stm_val or 'Summary'}**"
+                        title = f"📄 {stm_val or 'Summary'}"
 
                     st.markdown(
                         f"<div style='background:#1F4E79;color:#fff;"
@@ -595,7 +595,7 @@ with right:
 # 10. QUALITY ASSURANCE
 # =========================================================================
 with st.container(border=True):
-    st.subheader("🧪 Quality Assurance")
+    st.subheader("Quality Assurance")
 
     has_files     = bool(st.session_state.uploaded_stm_names)
     busy          = st.session_state.pending_action is not None
@@ -613,19 +613,19 @@ with st.container(border=True):
     b1, b2, b3 = st.columns(3)
     with b1:
         stm_clicked = styled_button(
-            "🔍 STM Validation",
+            "STM Validation",
             key="stm_val_btn", status_key="stm_val",
             disabled=common_disable,
         )
     with b2:
         scd_clicked = styled_button(
-            "🔁 SCD Validation",
+            "SCD Validation",
             key="scd_val_btn", status_key="scd_val",
             disabled=common_disable,
         )
     with b3:
         tc_clicked = styled_button(
-            "🧬 Test Case Generator",
+            "Test Case Generator",
             key="tc_gen_btn", status_key="tc_gen",
             disabled=common_disable,
         )
@@ -650,7 +650,7 @@ with st.container(border=True):
 
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("✅ Confirm and Run", key="confirm_vtype",
+                if st.button("Confirm and Run", key="confirm_vtype",
                              use_container_width=True):
                     stm_csv = ",".join(st.session_state.uploaded_stm_names)
                     params  = {
@@ -836,7 +836,7 @@ if st.session_state.pending_action is not None:
 # 13. JOB EXECUTION HISTORY
 # =========================================================================
 st.divider()
-st.subheader("📜 Job Execution History")
+st.subheader("Job Execution History")
 
 if st.session_state.job_history:
     hist = pd.DataFrame(st.session_state.job_history)
