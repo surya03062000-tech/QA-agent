@@ -224,14 +224,14 @@ def get_notebook_output(task_run_id: int) -> dict:
 # Each kind maps to a list of (label, weight) phases. Weights are relative —
 # the renderer normalises them so the full bar = 100%.
 PHASE_PLANS = {
-    "File Copy + Summary": [
+    "Uploading & Generating Summary": [
         ("Uploading STM file(s) to workspace",          1.0),
         ("Staging files to Unity Catalog volume",       1.5),
         ("Parsing STM structure and metadata",          2.0),
         ("Extracting column inventory per layer",       1.5),
         ("Compiling summary report",                    1.0),
     ],
-    "STM Validation": [
+    "Structure Validation": [
         ("Parsing STM workbook and metadata blocks",    1.0),
         ("Resolving source / target data artifacts",    1.0),
         ("Validating RAW source against CSV file",      2.0),
@@ -276,7 +276,7 @@ class ProgressTracker:
     """Renders a progress card with current phase + percentage.
 
     Usage:
-        tracker = ProgressTracker(slot, "STM Validation")
+        tracker = ProgressTracker(slot, "Structure Validation")
         tracker.start()
         ...  # tracker auto-advances phases based on elapsed time
         tracker.done()    # or tracker.fail("reason")
@@ -565,12 +565,30 @@ with right:
                         group_keys.append(key)
                     groups[key].append(row)
 
+                # Sheet-name → descriptive flow-label mapping
+                SHEET_FLOW_LABELS = {
+                    "raw":     "Source to Raw",
+                    "std_raw": "Raw to Std.Raw",
+                    "curated": "Std.Raw to Curated",
+                }
+                def _sheet_to_flow(sheet_name: str) -> str:
+                    """Return a human-readable flow label for a sheet name."""
+                    sn = sheet_name.lower()
+                    if sn.startswith("std_raw") or "std_raw" in sn:
+                        return SHEET_FLOW_LABELS["std_raw"]
+                    if sn.startswith("raw") and "std" not in sn:
+                        return SHEET_FLOW_LABELS["raw"]
+                    if sn.startswith("curated") or "curated" in sn:
+                        return SHEET_FLOW_LABELS["curated"]
+                    return sheet_name   # fallback: show original name
+
                 # Render each group as: title bar + table of content columns
                 for i, (stm_val, sheet_val) in enumerate(group_keys):
-                    if stm_val and sheet_val:
-                        title = f"📄 {stm_val}  ·  Sheet: {sheet_val}"
-                    elif sheet_val:
-                        title = f"📄 Sheet: {sheet_val}"
+                    flow_label = _sheet_to_flow(sheet_val) if sheet_val else ""
+                    if stm_val and flow_label:
+                        title = f"📄 {stm_val}  ·  {flow_label}"
+                    elif flow_label:
+                        title = f"📄 {flow_label}"
                     else:
                         title = f"📄 {stm_val or 'Summary'}"
 
@@ -613,7 +631,7 @@ with st.container(border=True):
     b1, b2, b3 = st.columns(3)
     with b1:
         stm_clicked = styled_button(
-            "STM Validation",
+            "🔍 Structure Validation",
             key="stm_val_btn", status_key="stm_val",
             disabled=common_disable,
         )
@@ -689,7 +707,7 @@ with st.container(border=True):
         st.session_state.btn_status["stm_val"] = "running"
         st.session_state.pending_action = {
             "kind"    : "validation",
-            "category": "STM Validation",
+            "category": "Structure Validation",
             "job_id"  : JOB_IDS["STM Validation"],
             "params"  : {"STM_FILE_NAMES": stm_csv},
             "btn_key" : "stm_val",
@@ -737,7 +755,7 @@ if st.session_state.pending_action is not None:
 
     # Pick the phase plan based on the action kind
     if action["kind"] == "upload_summary":
-        tracker = ProgressTracker(tracker_slot, "File Copy + Summary")
+        tracker = ProgressTracker(tracker_slot, "Uploading & Generating Summary")
     else:
         tracker = ProgressTracker(tracker_slot, action["category"])
     tracker.start()
