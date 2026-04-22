@@ -52,7 +52,7 @@ HEADERS = {
 # 2. PAGE CONFIG
 # =========================================================================
 st.set_page_config(
-    page_title="End-to-End AI QA",
+    page_title="IngestIQ™ AI QA",
     layout="wide",
 )
 
@@ -70,21 +70,37 @@ st.markdown("""
 @keyframes pulse { 0%{opacity:1;} 50%{opacity:.55;} 100%{opacity:1;} }
 
 /* ---- compact QA buttons (Run All / Structure / SCD / TC Generator) --- */
-.btn-compact button {
-    padding: 6px 18px !important;
+.btn-compact button,
+.btn-compact button:hover,
+.btn-compact button:focus,
+.btn-compact button:active {
+    padding: 4px 16px !important;
     font-size: 12px !important;
     font-weight: 600 !important;
-    min-height: 32px !important;
-    height: 32px !important;
+    min-height: 34px !important;
+    height: 34px !important;
+    max-height: 34px !important;
     line-height: 1.2 !important;
     border-radius: 6px !important;
-    letter-spacing: 0.02em !important;
+    letter-spacing: 0.03em !important;
+    border: none !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25) !important;
+    transition: opacity 0.15s ease !important;
+    width: 100% !important;
 }
-.btn-compact-idle    button { background:#2563EB !important; color:white !important; }
-.btn-compact-running button { background:#FACC15 !important; color:#111 !important;
-                               animation: pulse 1.2s infinite; }
-.btn-compact-success button { background:#16A34A !important; color:white !important; }
-.btn-compact-failed  button { background:#DC2626 !important; color:white !important; }
+.btn-compact button:hover { opacity: 0.88 !important; }
+.btn-compact-idle    button,
+.btn-compact-idle    button:focus { background:#2563EB !important; color:white !important; }
+.btn-compact-running button,
+.btn-compact-running button:focus { background:#FACC15 !important; color:#111 !important;
+                                     animation: pulse 1.2s infinite; }
+.btn-compact-success button,
+.btn-compact-success button:focus { background:#16A34A !important; color:white !important; }
+.btn-compact-failed  button,
+.btn-compact-failed  button:focus { background:#DC2626 !important; color:white !important; }
+/* remove Streamlit's default top margin inside compact divs */
+.btn-compact { margin-bottom: 0 !important; }
+.btn-compact > div { margin-bottom: 0 !important; }
 
 /* ---- progress tracker card --------------------------------------- */
 .progress-card {
@@ -520,7 +536,7 @@ _TCS_LOGO_B64 = "/9j/4AAQSkZJRgABAQEA2ADYAAD/7QAsUGhvdG9zaG9wIDMuMAA4QklNA+0AAAA
 # Title row: heading on the left, TCS logo on the right
 _title_col, _logo_col = st.columns([6, 1])
 with _title_col:
-    st.title("End-to-End AI Quality-Assurance Portal")
+    st.title("IngestIQ™ - AI-Powered QA for Data Ingestion Pipeline")
     st.caption("Upload STM file(s) → generate summary → run validations.")
 with _logo_col:
     st.markdown(
@@ -671,28 +687,27 @@ with st.container(border=True):
     if not has_files:
         st.info("Upload files first to enable the validation buttons.")
 
-    # Run All — compact full-width button
-    run_all_clicked = compact_button(
-        "▶  Run All Validation",
-        key="run_all_btn", status_key="run_all",
-        disabled=common_disable,
-    )
-
-    # Three compact buttons side-by-side
-    b1, b2, b3 = st.columns(3)
-    with b1:
+    # All 4 validation buttons in one equal-width row — same size, crisp look
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    with qa1:
+        run_all_clicked = compact_button(
+            "▶ Run All Validation",
+            key="run_all_btn", status_key="run_all",
+            disabled=common_disable,
+        )
+    with qa2:
         stm_clicked = compact_button(
             "🔍 Structure Validation",
             key="stm_val_btn", status_key="stm_val",
             disabled=common_disable,
         )
-    with b2:
+    with qa3:
         scd_clicked = compact_button(
             "🔁 SCD Validation",
             key="scd_val_btn", status_key="scd_val",
             disabled=common_disable,
         )
-    with b3:
+    with qa4:
         tc_clicked = compact_button(
             "🧬 Test Case Generator",
             key="tc_gen_btn", status_key="tc_gen",
