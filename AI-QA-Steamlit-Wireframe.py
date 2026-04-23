@@ -169,41 +169,51 @@ st.markdown("""
 }
 
 /* ---- section container backgrounds — match progress-card colour -------- */
-/* Streamlit's st.container(border=True) renders multiple nested divs.
-   We target every layer that can carry a background so the colour
-   actually shows up regardless of Streamlit version. */
+/* NOTE: Streamlit theme CSS in <head> outranks st.markdown styles.
+   The actual override is done via JS injection below (see st.components). */
 
-/* Outer wrapper */
-div[data-testid="stContainerWithBorder"] {
-    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%) !important;
-    border: 1px solid #cbd5e1 !important;
-    border-radius: 12px !important;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.04) !important;
-}
-/* Inner vertical block that Streamlit wraps content in */
-div[data-testid="stContainerWithBorder"] > div[data-testid="stVerticalBlockBorderWrapper"],
-div[data-testid="stContainerWithBorder"] > div[data-testid="stVerticalBlock"] {
-    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%) !important;
-    border-radius: 10px !important;
-}
-/* Any direct child div that might carry the white default */
-div[data-testid="stContainerWithBorder"] > div {
-    background: transparent !important;
-}
-
-/* Nested containers (INITIAL/DELTA picker etc.) stay lighter */
-div[data-testid="stContainerWithBorder"]
-     div[data-testid="stContainerWithBorder"] {
-    background: rgba(255,255,255,0.60) !important;
-    border: 1px dashed #cbd5e1 !important;
-    box-shadow: none !important;
-}
-div[data-testid="stContainerWithBorder"]
-     div[data-testid="stContainerWithBorder"] > div {
-    background: transparent !important;
-}
 </style>
 """, unsafe_allow_html=True)
+
+# Inject container background via JS into <head> so it beats Streamlit's theme.
+# This is the only reliable method — st.markdown <style> blocks sit inside a
+# <div> in the body and lose specificity battles against Streamlit's own CSS.
+import streamlit.components.v1 as _components
+_BG = "linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%)"
+_components.html(f"""
+<script>
+(function() {{
+  var css = `
+    /* section panels */
+    [data-testid="stContainerWithBorder"] {{
+        background: {_BG} !important;
+        border: 1.5px solid #cbd5e1 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06) !important;
+    }}
+    /* inner block Streamlit nests inside the border wrapper */
+    [data-testid="stContainerWithBorder"] > div {{
+        background: transparent !important;
+    }}
+    [data-testid="stVerticalBlockBorderWrapper"] {{
+        background: {_BG} !important;
+        border-radius: 10px !important;
+    }}
+    /* nested containers (INITIAL/DELTA picker etc.) */
+    [data-testid="stContainerWithBorder"]
+      [data-testid="stContainerWithBorder"] {{
+        background: rgba(255,255,255,0.60) !important;
+        border: 1px dashed #cbd5e1 !important;
+        box-shadow: none !important;
+    }}
+  `;
+  var style = document.createElement('style');
+  style.id = 'qa-section-bg';
+  style.textContent = css;
+  document.head.appendChild(style);
+}})();
+</script>
+""", height=0, scrolling=False)
 
 # =========================================================================
 # 4. SESSION-STATE BOOTSTRAP
