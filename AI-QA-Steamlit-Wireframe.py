@@ -168,24 +168,39 @@ st.markdown("""
     font-weight: 600;
 }
 
-/* ---- unify all section container backgrounds with the progress-card ---- */
-/* Streamlit renders st.container(border=True) as a stContainerWithBorder
-   element.  Applying the same gradient here makes the Upload, Summary
-   Viewer, Quality Assurance and Job History panels visually consistent
-   with the running-status card. */
+/* ---- section container backgrounds — match progress-card colour -------- */
+/* Streamlit's st.container(border=True) renders multiple nested divs.
+   We target every layer that can carry a background so the colour
+   actually shows up regardless of Streamlit version. */
+
+/* Outer wrapper */
 div[data-testid="stContainerWithBorder"] {
     background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%) !important;
     border: 1px solid #cbd5e1 !important;
     border-radius: 12px !important;
     box-shadow: 0 2px 6px rgba(0,0,0,0.04) !important;
 }
-/* Keep inner borders (INITIAL/DELTA picker) a touch lighter so nested
-   containers remain visually distinguishable. */
+/* Inner vertical block that Streamlit wraps content in */
+div[data-testid="stContainerWithBorder"] > div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stContainerWithBorder"] > div[data-testid="stVerticalBlock"] {
+    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%) !important;
+    border-radius: 10px !important;
+}
+/* Any direct child div that might carry the white default */
+div[data-testid="stContainerWithBorder"] > div {
+    background: transparent !important;
+}
+
+/* Nested containers (INITIAL/DELTA picker etc.) stay lighter */
 div[data-testid="stContainerWithBorder"]
      div[data-testid="stContainerWithBorder"] {
-    background: rgba(255,255,255,0.55) !important;
+    background: rgba(255,255,255,0.60) !important;
     border: 1px dashed #cbd5e1 !important;
     box-shadow: none !important;
+}
+div[data-testid="stContainerWithBorder"]
+     div[data-testid="stContainerWithBorder"] > div {
+    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -316,7 +331,7 @@ PHASE_PLANS = {
     ],
     "Run All Validation": [
         ("Parsing STM and staging data artifacts",      1.0),
-        ("Running Structure validations (RAW/STD/CUR)", 3.0),
+        ("Running STM layer validations (RAW/STD/CUR)", 3.0),
         ("Running SCD validations (counts, nulls, PK)", 3.0),
         ("Running data and audit-column validations",   2.5),
         ("Generating test cases",                       2.0),
