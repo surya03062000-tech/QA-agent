@@ -167,6 +167,26 @@ st.markdown("""
     color: #0f172a;
     font-weight: 600;
 }
+
+/* ---- unify all section container backgrounds with the progress-card ---- */
+/* Streamlit renders st.container(border=True) as a stContainerWithBorder
+   element.  Applying the same gradient here makes the Upload, Summary
+   Viewer, Quality Assurance and Job History panels visually consistent
+   with the running-status card. */
+div[data-testid="stContainerWithBorder"] {
+    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%) !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04) !important;
+}
+/* Keep inner borders (INITIAL/DELTA picker) a touch lighter so nested
+   containers remain visually distinguishable. */
+div[data-testid="stContainerWithBorder"]
+     div[data-testid="stContainerWithBorder"] {
+    background: rgba(255,255,255,0.55) !important;
+    border: 1px dashed #cbd5e1 !important;
+    box-shadow: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -296,7 +316,7 @@ PHASE_PLANS = {
     ],
     "Run All Validation": [
         ("Parsing STM and staging data artifacts",      1.0),
-        ("Running STM layer validations (RAW/STD/CUR)", 3.0),
+        ("Running Structure validations (RAW/STD/CUR)", 3.0),
         ("Running SCD validations (counts, nulls, PK)", 3.0),
         ("Running data and audit-column validations",   2.5),
         ("Generating test cases",                       2.0),
@@ -450,11 +470,36 @@ def extract_summary_list(run_id: int):
     return None
 
 
-def log_history(category: str, job_id: int, run_id, status: str):
+def log_history(category: str, job_id: int, run_id, status: str,
+                start_ts: float = None, end_ts: float = None):
+    """Append a row to the job-execution history.
+
+    start_ts / end_ts are Unix timestamps (seconds).  If end_ts is omitted
+    it defaults to now; if start_ts is omitted it also defaults to now
+    (so Duration reads 0s — used for the error-path call when no start
+    was captured).
+    """
+    _end   = end_ts   if end_ts   is not None else time.time()
+    _start = start_ts if start_ts is not None else _end
+    _dur_s = max(0.0, _end - _start)
+    # Format duration human-readably
+    if _dur_s < 60:
+        dur_txt = f"{_dur_s:.1f}s"
+    elif _dur_s < 3600:
+        m, s = divmod(int(_dur_s), 60)
+        dur_txt = f"{m}m {s}s"
+    else:
+        h, rem = divmod(int(_dur_s), 3600)
+        m, s = divmod(rem, 60)
+        dur_txt = f"{h}h {m}m {s}s"
     st.session_state.job_history.append({
-        "Category": category, "Job ID": job_id,
-        "Run ID"  : run_id,   "Status": status,
-        "Time"    : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Category"  : category,
+        "Job ID"    : job_id,
+        "Run ID"    : run_id,
+        "Status"    : status,
+        "Start Time": datetime.fromtimestamp(_start).strftime("%Y-%m-%d %H:%M:%S"),
+        "End Time"  : datetime.fromtimestamp(_end).strftime("%Y-%m-%d %H:%M:%S"),
+        "Duration"  : dur_txt,
     })
 
 
@@ -845,6 +890,7 @@ if st.session_state.pending_action is not None:
                 raise Exception(f"Upload failed: {errs}")
 
             # Phase 2-3 — File-Copy job
+            _copy_start = time.time()
             ok, copy_run = trigger_job(
                 FILE_COPY_JOB_ID,
                 {"workspace_file_paths": ",".join(ws_paths)},
@@ -853,7 +899,8 @@ if st.session_state.pending_action is not None:
                 raise Exception(f"File-Copy trigger failed: {copy_run}")
 
             copy_state, _ = poll_until_done(copy_run, tracker, "File-Copy")
-            log_history("File Copy", FILE_COPY_JOB_ID, copy_run, copy_state)
+            log_history("File Copy", FILE_COPY_JOB_ID, copy_run, copy_state,
+                        start_ts=_copy_start, end_ts=time.time())
             if copy_state != "SUCCESS":
                 raise Exception(f"File-Copy ended with {copy_state}")
 
@@ -864,6 +911,7 @@ if st.session_state.pending_action is not None:
                 st.session_state.uploaded_file_paths + ws_paths))
 
             # Phase 4-5 — Summary job
+            _sum_start = time.time()
             ok, sum_run = trigger_job(
                 SUMMARY_JOB_ID,
                 {"stm_file_names": ",".join(stm_names)},
@@ -872,7 +920,8 @@ if st.session_state.pending_action is not None:
                 raise Exception(f"Summary trigger failed: {sum_run}")
 
             sum_state, _ = poll_until_done(sum_run, tracker, "Summary")
-            log_history("Summary", SUMMARY_JOB_ID, sum_run, sum_state)
+            log_history("Summary", SUMMARY_JOB_ID, sum_run, sum_state,
+                        start_ts=_sum_start, end_ts=time.time())
             if sum_state != "SUCCESS":
                 raise Exception(f"Summary ended with {sum_state}")
 
@@ -891,12 +940,14 @@ if st.session_state.pending_action is not None:
             job_id   = action["job_id"]
             params   = action["params"]
 
+            _val_start = time.time()
             ok, run_id = trigger_job(job_id, params)
             if not ok:
                 raise Exception(f"Trigger failed: {run_id}")
 
             state, _ = poll_until_done(run_id, tracker, category)
-            log_history(category, job_id, run_id, state)
+            log_history(category, job_id, run_id, state,
+                        start_ts=_val_start, end_ts=time.time())
             if state != "SUCCESS":
                 raise Exception(f"{category} ended with {state}")
 
@@ -906,7 +957,9 @@ if st.session_state.pending_action is not None:
     except Exception as e:
         st.session_state.btn_status[btn_key] = "failed"
         tracker.fail(str(e)[:120])
-        log_history(action.get("category", action["kind"]), 0, "-", f"ERROR: {e}")
+        # Use tracker.start_ts as the start of the whole action
+        log_history(action.get("category", action["kind"]), 0, "-", f"ERROR: {e}",
+                    start_ts=tracker.start_ts, end_ts=time.time())
 
     finally:
         st.session_state.pending_action = None
