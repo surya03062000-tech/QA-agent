@@ -168,49 +168,60 @@ st.markdown("""
     font-weight: 600;
 }
 
-/* ---- section container backgrounds — match progress-card colour -------- */
-/* NOTE: Streamlit theme CSS in <head> outranks st.markdown styles.
-   The actual override is done via JS injection below (see st.components). */
+/* ---- section container backgrounds — handled via JS MutationObserver --- */
+/* Streamlit applies background via emotion inline style attributes which
+   beat any CSS selector (even !important). The MutationObserver below
+   patches the style.background property directly on every render. */
 
 </style>
 """, unsafe_allow_html=True)
 
-# Inject container background via JS into <head> so it beats Streamlit's theme.
-# This is the only reliable method — st.markdown <style> blocks sit inside a
-# <div> in the body and lose specificity battles against Streamlit's own CSS.
+# MutationObserver approach — the only reliable way to override Streamlit's
+# emotion CSS-in-JS inline styles. Runs whenever Streamlit re-renders.
 import streamlit.components.v1 as _components
-_BG = "linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%)"
+_BG  = "linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%)"
+_BDR = "1.5px solid #cbd5e1"
 _components.html(f"""
 <script>
 (function() {{
-  var css = `
-    /* section panels */
-    [data-testid="stContainerWithBorder"] {{
-        background: {_BG} !important;
-        border: 1.5px solid #cbd5e1 !important;
-        border-radius: 12px !important;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.06) !important;
-    }}
-    /* inner block Streamlit nests inside the border wrapper */
-    [data-testid="stContainerWithBorder"] > div {{
-        background: transparent !important;
-    }}
-    [data-testid="stVerticalBlockBorderWrapper"] {{
-        background: {_BG} !important;
-        border-radius: 10px !important;
-    }}
-    /* nested containers (INITIAL/DELTA picker etc.) */
-    [data-testid="stContainerWithBorder"]
-      [data-testid="stContainerWithBorder"] {{
-        background: rgba(255,255,255,0.60) !important;
-        border: 1px dashed #cbd5e1 !important;
-        box-shadow: none !important;
-    }}
-  `;
-  var style = document.createElement('style');
-  style.id = 'qa-section-bg';
-  style.textContent = css;
-  document.head.appendChild(style);
+  var BG  = '{_BG}';
+  var BDR = '{_BDR}';
+
+  function applyBg(root) {{
+    // Every st.container(border=True) gets data-testid="stContainerWithBorder"
+    // Streamlit also wraps it in stVerticalBlockBorderWrapper
+    var containers = (root || document).querySelectorAll(
+      '[data-testid="stContainerWithBorder"], ' +
+      '[data-testid="stVerticalBlockBorderWrapper"]'
+    );
+    containers.forEach(function(el) {{
+      // Skip if it is itself nested inside another bordered container
+      // (those get a lighter solid white so they stay distinct)
+      var parent = el.parentElement && el.parentElement.closest(
+        '[data-testid="stContainerWithBorder"]'
+      );
+      if (parent) {{
+        el.style.setProperty('background', 'rgba(255,255,255,0.62)', 'important');
+        el.style.setProperty('border', '1px dashed #cbd5e1', 'important');
+      }} else {{
+        el.style.setProperty('background', BG, 'important');
+        el.style.setProperty('border', BDR, 'important');
+        el.style.setProperty('border-radius', '12px', 'important');
+        el.style.setProperty('box-shadow', '0 2px 6px rgba(0,0,0,0.05)', 'important');
+      }}
+    }});
+  }}
+
+  // Run immediately in case elements already exist
+  applyBg(document);
+
+  // Watch for Streamlit re-renders (it swaps DOM subtrees)
+  var obs = new MutationObserver(function(mutations) {{
+    mutations.forEach(function(m) {{
+      if (m.addedNodes.length) {{ applyBg(document); }}
+    }});
+  }});
+  obs.observe(document.body, {{ childList: true, subtree: true }});
 }})();
 </script>
 """, height=0, scrolling=False)
