@@ -25,6 +25,7 @@ VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
 
 FILE_COPY_JOB_ID = 1095682687953224
 SUMMARY_JOB_ID   = 29471425720129
+DG_CREATION_JOB_ID = 878559626474883
 
 JOB_IDS = {
     "Run All Validation"  : 566631342323223,
@@ -344,6 +345,7 @@ defaults = {
         "struct_val"    : "idle",
         "scd_val"       : "idle",
         "tc_gen"        : "idle",
+        "dg_creation"   : "idle",
     },
 }
 for k, v in defaults.items():
@@ -882,6 +884,71 @@ with st.container(border=True):
 
 
 # =====================================================================
+# 13B. DG DOCUMENT CREATION PANEL
+# =====================================================================
+with st.container(border=True):
+    st.subheader("📝 DG Document Creation")
+    st.caption("Generate Data Governance documentation for your tables")
+    
+    dg_busy = st.session_state.pending_action is not None
+    
+    # Input parameters in 2 rows of 3 columns each
+    dg_row1_col1, dg_row1_col2, dg_row1_col3 = st.columns(3)
+    with dg_row1_col1:
+        catalog = st.text_input("CATALOG", key="dg_catalog", disabled=dg_busy)
+    with dg_row1_col2:
+        schema = st.text_input("SCHEMA", key="dg_schema", disabled=dg_busy)
+    with dg_row1_col3:
+        table_name = st.text_input("TABLE NAME", key="dg_table_name", disabled=dg_busy)
+    
+    dg_row2_col1, dg_row2_col2, dg_row2_col3 = st.columns(3)
+    with dg_row2_col1:
+        table_description = st.text_input("TABLE DESCRIPTION", key="dg_table_desc", disabled=dg_busy)
+    with dg_row2_col2:
+        platform_system_name = st.text_input("PLATFORM SYSTEM NAME", key="dg_platform", disabled=dg_busy)
+    with dg_row2_col3:
+        database_storage_name = st.text_input("DATABASE STORAGE NAME", key="dg_database", disabled=dg_busy)
+    
+    # Validation and submission
+    dg_all_filled = all([
+        catalog.strip(), schema.strip(), table_name.strip(),
+        table_description.strip(), platform_system_name.strip(), 
+        database_storage_name.strip()
+    ])
+    
+    # Button
+    dg_clicked = compact_button(
+        "🚀 Create DG Document", key="dg_creation_btn",
+        status_key="dg_creation", disabled=(not dg_all_filled) or dg_busy,
+    )
+    
+    if not dg_all_filled and not dg_busy:
+        st.info("ℹ️ Please fill in all parameters to create DG document.")
+    
+    # ── DG Creation trigger ─────────────────────────────────────────
+    if dg_clicked and not dg_busy:
+        st.session_state.btn_status["dg_creation"] = "running"
+        st.session_state.pending_action = {
+            "kind": "dg_creation",
+            "category": "DG Document Creation",
+            "job_id": DG_CREATION_JOB_ID,
+            "params": {
+                "CATALOG": catalog.strip(),
+                "SCHEMA": schema.strip(),
+                "TABLE_NAME": table_name.strip(),
+                "TABLE_DESCRIPTION": table_description.strip(),
+                "PLATFORM_SYSTEM_NAME": platform_system_name.strip(),
+                "DATABASE_STORAGE_NAME": database_storage_name.strip(),
+            },
+            "btn_key": "dg_creation",
+        }
+        st.rerun()
+    
+    # ── DG progress slot (shown inside DG panel) ────────────────────
+    dg_tracker_slot = st.empty()
+
+
+# =====================================================================
 # 14. UPLOAD — trigger
 # =====================================================================
 if up_clicked and can_upload:
@@ -906,6 +973,9 @@ if st.session_state.pending_action is not None:
     if action["kind"] == "upload_summary":
         # Progress shown inline inside the upload box
         tracker = ProgressTracker(inline_status_slot, "Uploading & Generating Summary", compact=True)
+    elif action["kind"] == "dg_creation":
+        # Progress shown in the DG tracker slot
+        tracker = ProgressTracker(dg_tracker_slot, action["category"], compact=False)
     else:
         # Progress shown in the QA tracker slot
         tracker = ProgressTracker(qa_tracker_slot, action["category"], compact=False)
@@ -986,6 +1056,25 @@ if st.session_state.pending_action is not None:
             state, _ = poll_until_done(run_id, tracker, category)
             log_history(category, job_id, run_id, state,
                         start_ts=_val_start, end_ts=time.time())
+            if state != "SUCCESS":
+                raise Exception(f"{category} ended with {state}")
+
+            st.session_state.btn_status[btn_key] = "success"
+            tracker.done()
+
+        elif action["kind"] == "dg_creation":
+            category = action["category"]
+            job_id   = action["job_id"]
+            params   = action["params"]
+
+            _dg_start = time.time()
+            ok, run_id = trigger_job(job_id, params)
+            if not ok:
+                raise Exception(f"Trigger failed: {run_id}")
+
+            state, _ = poll_until_done(run_id, tracker, category)
+            log_history(category, job_id, run_id, state,
+                        start_ts=_dg_start, end_ts=time.time())
             if state != "SUCCESS":
                 raise Exception(f"{category} ended with {state}")
 
