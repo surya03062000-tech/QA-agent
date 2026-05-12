@@ -13,12 +13,18 @@ import time
 import json
 import base64
 from datetime import datetime
+from databricks import sql
 
 # =========================================================================
 # 1. CONFIG
 # =========================================================================
 DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
 TOKEN           = "dapi180370eb25ac521baee3f96924db98e9"
+
+# Databricks SQL Warehouse connection for DG Creation
+DBX_HOST = "dbc-927300a1-adc8.cloud.databricks.com"
+DBX_HTTP_PATH = "/sql/1.0/warehouses/638494b8211390ee"
+DBX_TOKEN = "dapic37c7d5d9868e9385af5fc89e379c926"
 
 WORKSPACE_UPLOAD_DIR = "/Shared/qa_uploads"
 VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
@@ -38,6 +44,14 @@ HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type" : "application/json",
 }
+
+def get_databricks_connection():
+    """Get Databricks SQL connection for catalog/schema/table queries"""
+    return sql.connect(
+        server_hostname=DBX_HOST,
+        http_path=DBX_HTTP_PATH,
+        access_token=DBX_TOKEN,
+    )
 
 # =========================================================================
 # 2. PAGE CONFIG
@@ -355,6 +369,55 @@ for k, v in defaults.items():
 # =========================================================================
 # 5. DATABRICKS API HELPERS
 # =========================================================================
+
+# ── Databricks SQL Catalog/Schema/Table Fetch Functions ──
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_catalogs():
+    """Fetch all catalogs from Databricks"""
+    try:
+        with get_databricks_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SHOW CATALOGS")
+            rows = cur.fetchall()
+        return sorted([r[0] for r in rows])
+    except Exception as e:
+        st.error(f"Error fetching catalogs: {e}")
+        return []
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_schemas(catalog: str):
+    """Fetch all schemas for a given catalog"""
+    try:
+        with get_databricks_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SHOW SCHEMAS IN `{catalog}`")
+            rows = cur.fetchall()
+        return sorted([r[0] for r in rows])
+    except Exception as e:
+        st.error(f"Error fetching schemas for `{catalog}`: {e}")
+        return []
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_tables(catalog: str, schema: str):
+    """Fetch all tables for a given catalog.schema"""
+    try:
+        with get_databricks_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SHOW TABLES IN `{catalog}`.`{schema}`")
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        df = pd.DataFrame(rows, columns=cols)
+        if not df.empty:
+            df.insert(0, "catalog", catalog)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching tables for `{catalog}`.`{schema}`: {e}")
+        return pd.DataFrame()
+
+
+# ── Original API Helpers ──
 def _clean_file_name(fname: str) -> str:
     return fname.rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
@@ -887,32 +950,96 @@ with st.container(border=True):
 # 13B. DG DOCUMENT CREATION PANEL
 # =====================================================================
 with st.container(border=True):
-    st.subheader("📝 DG Document Creation")
-    st.caption("Generate Data Governance documentation for your tables")
+    # Header with Refresh button in top-right corner
+    dg_header_col1, dg_header_col2 = st.columns([5, 1])
+    with dg_header_col1:
+        st.subheader("📝 DG Document Creation")
+        st.caption("Generate Data Governance documentation for your tables")
+    with dg_header_col2:
+        if st.button("🔄", key="dg_refresh_btn", use_container_width=True, help="Refresh catalog/schema/table lists"):
+            st.cache_data.clear()
+            st.rerun()
     
     dg_busy = st.session_state.pending_action is not None
     
-    # Input parameters in 2 rows of 3 columns each
-    dg_row1_col1, dg_row1_col2, dg_row1_col3 = st.columns(3)
-    with dg_row1_col1:
-        catalog = st.text_input("CATALOG", key="dg_catalog", disabled=dg_busy)
-    with dg_row1_col2:
-        schema = st.text_input("SCHEMA", key="dg_schema", disabled=dg_busy)
-    with dg_row1_col3:
-        table_name = st.text_input("TABLE NAME", key="dg_table_name", disabled=dg_busy)
+    # ── 1. Select Catalog (single select) ──
+    st.markdown("##### 1️⃣ Select Catalog")
+    catalogs = fetch_catalogs()
     
-    dg_row2_col1, dg_row2_col2, dg_row2_col3 = st.columns(3)
-    with dg_row2_col1:
+    if not catalogs:
+        st.warning("⚠️ No catalogs found. Click refresh or check your Databricks connection.")
+        st.stop()
+    
+    selected_catalog = st.selectbox(
+        "Catalog",
+        options=catalogs,
+        index=0,
+        key="dg_catalog_select",
+        disabled=dg_busy,
+        label_visibility="collapsed"
+    )
+    
+    # ── 2. Select Schemas (multi-select) ──
+    st.markdown("##### 2️⃣ Select Schema(s)")
+    schemas = fetch_schemas(selected_catalog) if selected_catalog else []
+    
+    selected_schemas = st.multiselect(
+        "Schemas (one or more)",
+        options=schemas,
+        default=[],
+        key="dg_schema_select",
+        placeholder="Choose one or more schemas",
+        disabled=dg_busy,
+        label_visibility="collapsed"
+    )
+    
+    # ── 3. Select Tables (multi-select) ──
+    st.markdown("##### 3️⃣ Select Table(s)")
+    
+    all_tables_df = pd.DataFrame()
+    table_options = []
+    
+    if selected_schemas:
+        frames = []
+        for sch in selected_schemas:
+            df = fetch_tables(selected_catalog, sch)
+            if not df.empty:
+                frames.append(df)
+        if frames:
+            all_tables_df = pd.concat(frames, ignore_index=True)
+            name_col = "tableName" if "tableName" in all_tables_df.columns else all_tables_df.columns[2]
+            db_col = "database" if "database" in all_tables_df.columns else all_tables_df.columns[1]
+            table_options = sorted({
+                f"{row[db_col]}.{row[name_col]}"
+                for _, row in all_tables_df.iterrows()
+            })
+    
+    selected_tables = st.multiselect(
+        "Tables (one or more)",
+        options=table_options,
+        key="dg_table_select",
+        placeholder="Choose one or more tables",
+        disabled=dg_busy,
+        label_visibility="collapsed"
+    )
+    
+    # ── 4. Additional Parameters ──
+    st.markdown("##### 4️⃣ Additional Parameters")
+    dg_param_col1, dg_param_col2, dg_param_col3 = st.columns(3)
+    with dg_param_col1:
         table_description = st.text_input("TABLE DESCRIPTION", key="dg_table_desc", disabled=dg_busy)
-    with dg_row2_col2:
+    with dg_param_col2:
         platform_system_name = st.text_input("PLATFORM SYSTEM NAME", key="dg_platform", disabled=dg_busy)
-    with dg_row2_col3:
+    with dg_param_col3:
         database_storage_name = st.text_input("DATABASE STORAGE NAME", key="dg_database", disabled=dg_busy)
     
-    # Validation and submission
+    # ── Validation and submission ──
     dg_all_filled = all([
-        catalog.strip(), schema.strip(), table_name.strip(),
-        table_description.strip(), platform_system_name.strip(), 
+        selected_catalog,
+        selected_schemas,
+        selected_tables,
+        table_description.strip(),
+        platform_system_name.strip(), 
         database_storage_name.strip()
     ])
     
@@ -923,19 +1050,23 @@ with st.container(border=True):
     )
     
     if not dg_all_filled and not dg_busy:
-        st.info("ℹ️ Please fill in all parameters to create DG document.")
+        st.info("ℹ️ Please select catalog, schema(s), table(s) and fill in all additional parameters.")
     
     # ── DG Creation trigger ─────────────────────────────────────────
     if dg_clicked and not dg_busy:
+        # Process multiple schemas and tables
+        schema_csv = ",".join(selected_schemas)
+        table_csv = ",".join(selected_tables)
+        
         st.session_state.btn_status["dg_creation"] = "running"
         st.session_state.pending_action = {
             "kind": "dg_creation",
             "category": "DG Document Creation",
             "job_id": DG_CREATION_JOB_ID,
             "params": {
-                "CATALOG": catalog.strip(),
-                "SCHEMA": schema.strip(),
-                "TABLE_NAME": table_name.strip(),
+                "CATALOG": selected_catalog,
+                "SCHEMA": schema_csv,
+                "TABLE_NAME": table_csv,
                 "TABLE_DESCRIPTION": table_description.strip(),
                 "PLATFORM_SYSTEM_NAME": platform_system_name.strip(),
                 "DATABASE_STORAGE_NAME": database_storage_name.strip(),
