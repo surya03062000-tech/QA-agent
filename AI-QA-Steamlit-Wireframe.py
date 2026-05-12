@@ -13,7 +13,14 @@ import time
 import json
 import base64
 from datetime import datetime
-from databricks import sql
+
+# Try to import databricks.sql, show error if not available
+try:
+    from databricks import sql as databricks_sql
+    DATABRICKS_SQL_AVAILABLE = True
+except ImportError:
+    DATABRICKS_SQL_AVAILABLE = False
+    databricks_sql = None
 
 # =========================================================================
 # 1. CONFIG
@@ -47,7 +54,12 @@ HEADERS = {
 
 def get_databricks_connection():
     """Get Databricks SQL connection for catalog/schema/table queries"""
-    return sql.connect(
+    if not DATABRICKS_SQL_AVAILABLE:
+        raise ImportError(
+            "databricks-sql-connector is not installed. "
+            "Please add 'databricks-sql-connector' to your requirements.txt file."
+        )
+    return databricks_sql.connect(
         server_hostname=DBX_HOST,
         http_path=DBX_HTTP_PATH,
         access_token=DBX_TOKEN,
@@ -374,6 +386,9 @@ for k, v in defaults.items():
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_catalogs():
     """Fetch all catalogs from Databricks"""
+    if not DATABRICKS_SQL_AVAILABLE:
+        st.error("❌ databricks-sql-connector is not installed. Add it to requirements.txt")
+        return []
     try:
         with get_databricks_connection() as conn:
             cur = conn.cursor()
@@ -388,6 +403,9 @@ def fetch_catalogs():
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_schemas(catalog: str):
     """Fetch all schemas for a given catalog"""
+    if not DATABRICKS_SQL_AVAILABLE:
+        st.error("❌ databricks-sql-connector is not installed. Add it to requirements.txt")
+        return []
     try:
         with get_databricks_connection() as conn:
             cur = conn.cursor()
@@ -402,6 +420,9 @@ def fetch_schemas(catalog: str):
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_tables(catalog: str, schema: str):
     """Fetch all tables for a given catalog.schema"""
+    if not DATABRICKS_SQL_AVAILABLE:
+        st.error("❌ databricks-sql-connector is not installed. Add it to requirements.txt")
+        return pd.DataFrame()
     try:
         with get_databricks_connection() as conn:
             cur = conn.cursor()
