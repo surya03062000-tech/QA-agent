@@ -64,7 +64,7 @@ DBX_HOST = _get_secret("DBX_HOST")
 DBX_HTTP_PATH = _get_secret("DBX_HTTP_PATH")
 DBX_TOKEN = _get_secret("DBX_TOKEN")
 
-if not all([HOST, HTTP_PATH, TOKEN]):
+if not all([DBX_HOST, DBX_HTTP_PATH, DBX_TOKEN]):
     st.error(
         "❌ Missing Databricks credentials.\n\n"
         "Set **DBX_HOST**, **DBX_HTTP_PATH**, **DBX_TOKEN** in Streamlit Cloud → "
