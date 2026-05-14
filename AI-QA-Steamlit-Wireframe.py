@@ -1066,13 +1066,21 @@ with st.container(border=True):
     
     # ── 4. Additional Parameters ──
     st.markdown("##### 4️⃣ Additional Parameters")
-    dg_param_col1, dg_param_col2, dg_param_col3 = st.columns(3)
-    with dg_param_col1:
-        table_description = st.text_input("TABLE DESCRIPTION", key="dg_table_desc", disabled=dg_busy)
-    with dg_param_col2:
-        platform_system_name = st.text_input("PLATFORM SYSTEM NAME", key="dg_platform", disabled=dg_busy)
-    with dg_param_col3:
-        database_storage_name = st.text_input("DATABASE STORAGE NAME", key="dg_database", disabled=dg_busy)
+    table_description = st.text_area(
+     "TABLE DESCRIPTION",
+     key="dg_table_desc",
+     height=200,                 
+     placeholder="Enter detailed table description here...",
+     disabled=dg_busy,
+    )
+
+ 
+    database_storage_name = st.text_input(
+     "DATABASE STORAGE NAME",
+     key="dg_database",
+     placeholder="Enter database/storage name",
+     disabled=dg_busy,
+    )
     
     # ── Validation and submission ──
     dg_all_filled = all([
@@ -1080,7 +1088,6 @@ with st.container(border=True):
         selected_schemas,
         selected_tables,
         table_description.strip(),
-        platform_system_name.strip(), 
         database_storage_name.strip()
     ])
     
