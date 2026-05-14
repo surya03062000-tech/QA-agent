@@ -49,6 +49,29 @@ HEADERS = {
     "Content-Type" : "application/json",
 }
 
+# ============================================================
+# Credentials (from Streamlit secrets or env vars)
+# ============================================================
+def _get_secret(key: str) -> str:
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key, "")
+
+DBX_HOST = _get_secret("DBX_HOST")
+DBX_HTTP_PATH = _get_secret("DBX_HTTP_PATH")
+DBX_TOKEN = _get_secret("DBX_TOKEN")
+
+if not all([HOST, HTTP_PATH, TOKEN]):
+    st.error(
+        "❌ Missing Databricks credentials.\n\n"
+        "Set **DBX_HOST**, **DBX_HTTP_PATH**, **DBX_TOKEN** in Streamlit Cloud → "
+        "App Settings → Secrets."
+    )
+    st.stop()
+
 def get_databricks_connection():
     """Get Databricks SQL connection for catalog/schema/table queries"""
     if not DATABRICKS_SQL_AVAILABLE:
