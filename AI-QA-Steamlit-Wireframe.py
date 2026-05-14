@@ -29,9 +29,6 @@ DATABRICKS_HOST = "https://dbc-927300a1-adc8.cloud.databricks.com"
 TOKEN           = "dapi180370eb25ac521baee3f96924db98e9"
 
 # Databricks SQL Warehouse connection for DG Creation
-DBX_HOST = "dbc-927300a1-adc8.cloud.databricks.com"
-DBX_HTTP_PATH = "/sql/1.0/warehouses/638494b8211390ee"
-DBX_TOKEN = "dapic37c7d5d9868e9385af5fc89e379c926"
 
 WORKSPACE_UPLOAD_DIR = "/Shared/qa_uploads"
 VOLUME_PATH          = "/Volumes/edl_qa/qa_agent/qa_validation_input"
