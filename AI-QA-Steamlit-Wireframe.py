@@ -1116,7 +1116,6 @@ with st.container(border=True):
                 "SCHEMA": schema_csv,
                 "TABLE_NAME": table_csv,
                 "TABLE_DESCRIPTION": table_description.strip(),
-                "PLATFORM_SYSTEM_NAME": platform_system_name.strip(),
                 "DATABASE_STORAGE_NAME": database_storage_name.strip(),
             },
             "btn_key": "dg_creation",
